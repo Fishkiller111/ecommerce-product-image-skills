@@ -1,0 +1,24 @@
+{
+  "file": "抖音新店. 拷贝-1440(修改).psb",
+  "sha256": "da485e1d803dec4090fbb32d47c73c7bb8e9c75599ae880bf5cf431097e0e463",
+  "canvas": [1618, 2070],
+  "artboard": {"id": 79, "name": "奥立好物甄选", "rect": [46, 514, 1486, 1954]},
+  "anchor": {"id": 9, "name": "圆角矩形 1", "rect": [72, 668, 1463, 1901]},
+  "slot": [112, 885, 1423, 1570],
+  "hero_layout": {
+    "slot_with_title": [84, 441, 1356, 1043],
+    "slot_without_title": [84, 226, 1356, 1043],
+    "target_width": 1212,
+    "max_scale": 2.0,
+    "shadow_safe_rect": [76, 432, 1364, 1081]
+  },
+  "legacy_product": {"id": 42, "name": "主图01"},
+  "text_layers": {
+    "header": {"id": 52, "before": "奥立好物甄选"},
+    "promo": {"id": 39, "before": "买1盒送1盒   买2送3"},
+    "badge": {"id": 26, "before": "药房\r同款"},
+    "tag_1": {"id": 28, "before": "正品保证"},
+    "tag_2": {"id": 32, "before": "实体药店"},
+    "tag_3": {"id": 36, "before": "现货速发"}
+  }
+}
