@@ -42,8 +42,14 @@ jobs:
           New-Item -ItemType Directory -Force $target | Out-Null
           Push-Location $target
           try {
-            & npx --yes skills@1.8.1 add $source --skill '*' --agent codex --copy --yes
-            if ($LASTEXITCODE -ne 0) { throw "skills add failed: $LASTEXITCODE" }
+            Write-Host "Node: $(node --version); npm: $(npm --version); npx: $((Get-Command npx).Source)"
+            & npx --yes 'skills@1.8.1' add $source --skill '*' --agent codex --copy --yes
+            if ($LASTEXITCODE -ne 0) {
+              $code = $LASTEXITCODE
+              $cache = (npm config get cache).Trim()
+              Get-ChildItem (Join-Path $cache '_logs') -Filter '*debug-0.log' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 | Get-Content -Tail 80
+              throw "skills add failed: $code"
+            }
             foreach ($name in @('ai-ecommerce-product-images', 'ecommerce-template-workflow', 'psb-template-product-swap')) {
               if (!(Test-Path (Join-Path $target ".agents\skills\$name\SKILL.md"))) { throw "Missing skill $name" }
             }
