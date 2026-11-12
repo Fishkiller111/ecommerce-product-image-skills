@@ -13,6 +13,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.20.0'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -27,3 +30,28 @@ jobs:
           PSB_RUN_MODEL_TESTS: '1'
           PYTHONDONTWRITEBYTECODE: '1'
         run: python -m unittest discover -s skills/psb-template-product-swap/tests -v
+      - name: Install the three skills with the official CLI
+        shell: pwsh
+        env:
+          DISABLE_TELEMETRY: '1'
+          DO_NOT_TRACK: '1'
+          PYTHONUTF8: '1'
+        run: |
+          $source = $env:GITHUB_WORKSPACE
+          $target = Join-Path $env:RUNNER_TEMP '技能 安装 test'
+          New-Item -ItemType Directory -Force $target | Out-Null
+          Push-Location $target
+          try {
+            & npx --yes skills@1.8.1 add $source --skill '*' --agent codex --copy --yes
+            if ($LASTEXITCODE -ne 0) { throw "skills add failed: $LASTEXITCODE" }
+            foreach ($name in @('ai-ecommerce-product-images', 'ecommerce-template-workflow', 'psb-template-product-swap')) {
+              if (!(Test-Path (Join-Path $target ".agents\skills\$name\SKILL.md"))) { throw "Missing skill $name" }
+            }
+            $installed = Join-Path $target '.agents\skills\psb-template-product-swap'
+            foreach ($path in @('requirements-windows.txt', 'scripts\platform_support.py', 'scripts\cutout_product.py')) {
+              if (!(Test-Path (Join-Path $installed $path))) { throw "Missing Windows file $path" }
+            }
+            $env:PSB_PYTHON = (Get-Command python).Source
+            & (Join-Path $installed 'run.bat') --help
+            if ($LASTEXITCODE -ne 0) { throw "Installed launcher failed: $LASTEXITCODE" }
+          } finally { Pop-Location }
