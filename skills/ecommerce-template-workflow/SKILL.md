@@ -17,8 +17,8 @@ description: 根据一张真实商品原图和用户指定文案，串联商品�
 ## 执行
 
 1. 以原图为商品事实来源。执行 `ai-ecommerce-product-images` 的白底保真处理及其逐项检查；若已有用户确认的高清透明素材，可直接检查并使用。白底图与原图对比品牌、文字、图案、颜色、比例、商品数量、轮廓和可见细节。生成式修复可能改写内容；不能辨认的文字不能视作核对通过。保真不通过时按该技能重试，仍失败则标记 `REJECTED`，停止正式流程并说明，不得称为实拍或可上架。
-2. 将通过检查的素材转换为真正带 alpha 的透明 PNG，不能简单地把白色当透明色以免损坏白色包装。在 macOS 上可执行 `"$PSB_PYTHON" "$PSB_SKILL_DIR/scripts/cutout_product.py" 白底图.png 透明图.png`（若未设置则以已安装依赖的 `python3` 替代）；仅处理背景，输出不覆盖现有文件。检查白色包装、边缘、孔洞和阴影，确保商品内容未改变。白底保真图不是透明输入；透明素材再次对照原图。保存处理前后素材。对于已经确认的透明素材不再重新抠图。
-3. 用透明素材、唯一 SKU 和 JSON 调用已安装的 `psb-template-product-swap/run.sh`（以该技能目录绝对路径执行），使用 `--prepared-cutout`。商品已调光增强并确认外观时附加 `--keep-product-look` 避免重复增强；否则按套版技能默认增强。不要把生成式高清素材当作原始像素；须结合源照片主体尺寸判断清晰度。
+2. 将通过检查的素材转换为真正带 alpha 的透明 PNG，不能简单地把白色当透明色以免损坏白色包装。使用套版技能的 `scripts/cutout_product.py`：macOS 可执行 `"$PSB_PYTHON" "$PSB_SKILL_DIR/scripts/cutout_product.py" 白底图.png 透明图.png`；Windows PowerShell 使用 `& $env:PSB_PYTHON (Join-Path $env:PSB_SKILL_DIR "scripts\cutout_product.py") "白底图.png" "透明图.png"`。Windows 须先安装 `requirements-windows.txt`；仅对源图应用本地蒙版，输出不覆盖现有文件。检查白色包装、边缘、孔洞和阴影，确保商品内容未改变。白底保真图不是透明输入；透明素材再次对照原图。保存处理前后素材。对于已经确认的透明素材不再重新抠图。
+3. 用透明素材、唯一 SKU 和 JSON 调用已安装的 `psb-template-product-swap/run.sh`（macOS）或 `run.bat`（Windows），或直接以配置好的 Python 执行 `scripts/render_sku.py`；均使用技能目录绝对路径，使用 `--prepared-cutout`。商品已调光增强并确认外观时附加 `--keep-product-look` 避免重复增强；否则按套版技能默认增强。不要把生成式高清素材当作原始像素；须结合源照片主体尺寸判断清晰度。
 4. 读取复核 JSON 的 `detail_review`、`publication`，并以 100% 大小检查最终图、包装细字、边缘、光晕、位置与文案。照片需放大造成原始细节不足、细字模糊或保真无法确认时不得交付为上架成品。
 
 ## 失败与试样

@@ -27,4 +27,22 @@ description: 无需 Photoshop，按固定抖音 PSB 母版换品、换文案。�
 - **文字**：仅使用客户确认或可从包装核对的描述。`hero_title` / `hero_subtitle` 可在浅色区建立标题层级；不传则该区域只放商品。模板文字键为 `header`、`promo`、`badge`（两行，用 `\n`）、`tag_1`、`tag_2`、`tag_3`。示例见 [文案示例](examples/copy.json)。无新文案保留原文，未确认的模板促销和承诺不可对外发布。
 - **输出**：`outputs/psb-template-swap-direct/<SKU>/` 内有透明输入、入模素材、1440×1440 主图和复核 JSON。先看 `detail_review` 与 `publication`，再看 `studio_light`。在成图和原图间核对漏抠、过曝、光晕、包装细字和颜色；任何状态都不代替人工复核。每 SKU 独立目录，不覆盖结果。
 
-此分发包不包含 Python 运行时及第三方库。需要 Python 3.11+ 和 `requirements.txt` 中的依赖；建议在虚拟环境安装，并以 `PSB_PYTHON` 指向虚拟环境 Python。自动抠图需 macOS 14+、Vision 和 Xcode Command Line Tools；自动抠图之外的文案排版仍依赖脚本中指定的 macOS 中文字体，因此当前只验证 macOS。非 macOS 不承诺可用。结果是 **扁平 PNG，不是可编辑 PSB**。
+## Windows 10 64 位安装与运行
+
+在培训项目根目录的 PowerShell 中执行（`py` 为 Python Launcher；使用 Python 3.12 64 位）：
+
+```powershell
+$Skill = Join-Path (Get-Location) '.agents\skills\psb-template-product-swap'
+py -3.12 -m venv .venv-product-skills
+& '.\.venv-product-skills\Scripts\python.exe' -m pip install -r (Join-Path $Skill 'requirements-windows.txt')
+$env:PSB_PYTHON = (Resolve-Path '.\.venv-product-skills\Scripts\python.exe').Path
+& (Join-Path $Skill 'run.bat') 'C:\素材\商品.jpg' --sku SKU001 --text-json 'C:\素材\文案.json'
+```
+
+`$Skill` 和示例路径按实际安装位置、文件名调整；输入中文及带空格路径须加引号。无需启用 PowerShell 脚本执行策略；退出 PowerShell 后应重新配置当前会话的 `PSB_PYTHON`，或让 Codex 直接调用虚拟环境的 Python。
+
+Windows 自动抠图使用本地 CPU 蒙版（rembg + ONNX Runtime，默认 `u2netp`），只对原始商品 RGB 增加 alpha，不将商品图片上传至抠图服务。第一次使用需联网下载对应权重；白色软管、多个商品、边缘及阴影仍须人工检查。可设置 `PSB_REMBG_MODEL=u2net` 使用较大模型；不得使用云端模型冒充本地处理。模型及训练数据许可独立于代码，商业使用前由使用者确认。未联网、缺少运行库或蒙版异常时中止，改用已确认透明 PNG；不可把空白结果当成功。
+
+文字默认优先使用 Windows 系统的微软雅黑、黑体或宋体；如系统未安装，可设置 `PSB_FONT_PATH` 为中文字体文件绝对路径（集合文件可设置从 0 开始的 `PSB_FONT_INDEX`）。只读本机字体，不随包分发微软字体；缺字或不可用应报错，不要交付方框字。ONNX Runtime 如提示 DLL 缺失，请由管理员检查 Visual C++ 运行库。
+
+此分发包不包含 Python 或第三方库。macOS 的套版继续使用 `requirements.txt`；自动抠图使用 macOS 14+ Vision 和 Xcode Command Line Tools。Windows 建议 Python 3.12 64 位并安装 `requirements-windows.txt`。Windows Server CI 不等于 Windows 10 真机验收；用户上架前仍需在自己的设备和素材上复核。结果是 **扁平 PNG，不是可编辑 PSB**。

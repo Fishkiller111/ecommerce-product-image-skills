@@ -1,0 +1,28 @@
+name: Windows compatibility
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    name: Windows Server 2022 / Python 3.12
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Install Windows dependencies
+        shell: pwsh
+        run: python -m pip install -r skills/psb-template-product-swap/requirements-windows.txt
+      - name: Run product, font, launcher and PSB tests
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python -m unittest discover -s skills/psb-template-product-swap/tests -v

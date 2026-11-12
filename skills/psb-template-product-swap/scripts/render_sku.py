@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -16,6 +17,7 @@ try:
     from psd_tools import PSDImage
     from hd_product import prepare_hd_product
     from studio_light import studio_light
+    from platform_support import load_font, check_glyphs, local_mask
 except ImportError as exc:
     raise SystemExit('缺少依赖：请用 python -m pip install -r requirements.txt 安装依赖') from exc
 
@@ -106,8 +108,16 @@ def cutout(source, dest, mask_tool, spec):
             if not rgba.getchannel('A').getbbox(): raise ValueError('输入图像完全透明')
             rgba.save(dest)
             return 'provided-alpha'
-    if sys.platform != 'darwin':
-        raise ValueError('当前仅 macOS 支持自动抠图；其他平台请提供透明 PNG')
+    backend = os.environ.get('PSB_CUTOUT_BACKEND', 'auto').lower()
+    if backend == 'auto':
+        backend = 'vision' if sys.platform == 'darwin' else ('rembg' if sys.platform == 'win32' else 'unsupported')
+    if backend == 'rembg':
+        mask, model = local_mask(rgba)
+        rgba.putalpha(mask)
+        rgba.save(dest)
+        return 'rembg-' + model + '-mask-original-rgb'
+    if backend != 'vision' or sys.platform != 'darwin':
+        raise ValueError('当前环境无可用自动抠图；Windows 请安装 requirements-windows.txt，或提供透明 PNG')
     if not shutil.which('xcrun'):
         raise ValueError('缺少 xcrun 编译器；请提供透明 PNG 或安装 Apple 命令行工具')
     # Build in an isolated temporary directory; no application installation.
@@ -149,8 +159,6 @@ def read_prepared_product(source):
 
 def draw_text(base, psd_layers, edits, artboard):
     if not edits: return
-    font_path=Path('/System/Library/Fonts/STHeiti Medium.ttc')
-    if not font_path.exists(): raise ValueError('缺少中文字体，无法安全生成文字；请提供原文或配置字体')
     d=ImageDraw.Draw(base)
     ax,ay=artboard[:2]
     for key, ref, content in edits:
@@ -162,13 +170,14 @@ def draw_text(base, psd_layers, edits, artboard):
         min_size=max(12,int(h/len(lines)*0.48)); max_size=max(min_size,int(h/len(lines)*1.15))
         chosen=None
         for size in range(max_size,min_size-1,-1):
-            font=ImageFont.truetype(str(font_path),size,index=0)
+            font=load_font('template',size)
             boxes=[d.textbbox((0,0),line,font=font,stroke_width=0) for line in lines]
             widths=[b[2]-b[0] for b in boxes]
             if max(widths,default=0)<=w and size*len(lines)<=h*1.1:
                 chosen=(font,boxes,widths,size);break
         if not chosen: raise ValueError(f'{key} 文案过长，无法放入原文字区域')
         font,boxes,widths,size=chosen
+        check_glyphs(font,content,key)
         for i,line in enumerate(lines):
             box=boxes[i]; line_y=y1+(h-size*len(lines))/2+i*size-box[1]
             line_x=x1+(w-widths[i])/2-box[0]
@@ -235,8 +244,6 @@ def place_product(base, hd_product, placement):
 def draw_hero(base, hero):
     if not hero: return
     d=ImageDraw.Draw(base)
-    font_path=Path('/System/Library/Fonts/Hiragino Sans GB.ttc')
-    if not font_path.exists(): raise ValueError('缺少主视觉中文字体')
     for key,box,max_size,min_size,fill,stroke in [
         ('hero_title',(130,212,1310,357),139,62,(142,45,19,255),2),
         ('hero_subtitle',(160,371,1280,424),47,26,(155,75,41,255),0),
@@ -244,9 +251,10 @@ def draw_hero(base, hero):
         if key not in hero: continue
         copy=hero[key]; x1,y1,x2,y2=box
         for size in range(max_size,min_size-1,-1):
-            f=ImageFont.truetype(str(font_path),size,index=1)
+            f=load_font('hero',size)
             x,y,r,b=d.textbbox((0,0),copy,font=f,stroke_width=stroke)
             if r-x<=x2-x1 and b-y<=y2-y1:
+                check_glyphs(f,copy,key)
                 d.text(((x1+x2-r+x)//2-x,(y1+y2-b+y)//2-y),copy,font=f,fill=fill,stroke_width=stroke,stroke_fill=fill)
                 break
         else: raise ValueError(f'{key} 文案过长，无法放入主视觉区域')
@@ -269,8 +277,9 @@ def detail_review(source_size, placement_size, ai_preview):
 def label_ai_preview(base):
     # Make the non-production status survive sharing outside the output folder.
     draw=ImageDraw.Draw(base)
-    font=ImageFont.truetype('/System/Library/Fonts/Hiragino Sans GB.ttc',28,index=1)
+    font=load_font('hero',28)
     label='AI 修复样张 · 勿上架'
+    check_glyphs(font,label,'AI 样张标记')
     x,y,r,b=draw.textbbox((0,0),label,font=font)
     left,top=base.width-(r-x)-48,169
     draw.rounded_rectangle((left-12,top-7,left+r-x+12,top+b-y+7),
@@ -338,7 +347,7 @@ def main():
                     product=product.crop(box)
             working=product
         quality=mask_diagnostics(working.getchannel('A'))
-        if mode == 'macos-vision-mask-original-rgb':
+        if mode == 'macos-vision-mask-original-rgb' or mode.startswith('rembg-'):
             quality['status']='自动蒙版未验收；白色包装和边缘必须逐像素目视复核'
         placement=plan_product(base.width,working,bool(hero),args.product_align)
         x,y,r,b=placement['rect']

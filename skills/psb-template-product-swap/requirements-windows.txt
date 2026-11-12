@@ -1,0 +1,3 @@
+-r requirements.txt
+# Windows 10 64-bit local masks; Python 3.11-3.13, recommend 3.12.
+rembg[cpu]==2.0.87
