@@ -88,3 +88,19 @@ jobs:
             & (Join-Path $installed 'run.bat') --help
             if ($LASTEXITCODE -ne 0) { throw "Public launcher failed: $LASTEXITCODE" }
           } finally { Pop-Location }
+      - name: Test PowerShell npx.cmd fallback on Windows
+        shell: pwsh
+        env:
+          DISABLE_TELEMETRY: '1'
+          DO_NOT_TRACK: '1'
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP '命令 安装 test'
+          New-Item -ItemType Directory -Force $target | Out-Null
+          Push-Location $target
+          try {
+            npx.cmd --yes skills add Fishkiller111/ecommerce-product-image-skills --skill '*' --agent codex --copy --yes
+            if ($LASTEXITCODE -ne 0) { throw "npx.cmd installation failed: $LASTEXITCODE" }
+            foreach ($name in @('ai-ecommerce-product-images', 'ecommerce-template-workflow', 'psb-template-product-swap')) {
+              if (!(Test-Path (Join-Path $target ".agents\skills\$name\SKILL.md"))) { throw "Missing fallback skill $name" }
+            }
+          } finally { Pop-Location }

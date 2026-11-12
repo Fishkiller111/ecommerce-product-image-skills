@@ -16,7 +16,9 @@
 npx skills add Fishkiller111/ecommerce-product-image-skills
 ```
 
-按提示选择三个技能和需要使用的 Agent；需要在 Codex 全局安装时，可使用：
+按提示选择三个技能和需要使用的 Agent。Windows PowerShell 若提示 `npx.ps1` 被执行策略阻止，可改用 `npx.cmd skills add Fishkiller111/ecommerce-product-image-skills`，无需修改执行策略。
+
+需要在 Codex 全局安装时，可使用：
 
 ```bash
 npx skills add Fishkiller111/ecommerce-product-image-skills --skill '*' --agent codex --global --yes
