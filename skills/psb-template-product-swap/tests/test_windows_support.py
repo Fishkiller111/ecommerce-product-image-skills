@@ -100,6 +100,23 @@ class WindowsSupportTests(unittest.TestCase):
             second=subprocess.run(command, capture_output=True, text=True, encoding='utf8')
             self.assertNotEqual(second.returncode, 0)
 
+    @unittest.skipUnless(os.environ.get('PSB_RUN_MODEL_TESTS') == '1', 'optional real ONNX model test')
+    def test_real_local_model_inference_preserves_original_pixels(self):
+        with tempfile.TemporaryDirectory(prefix='本地蒙版 ') as temp:
+            root=Path(temp); source=root/'原图.png'; dest=root/'结果.png'
+            image=Image.new('RGB',(512,512),'#e9e9e9')
+            draw=ImageDraw.Draw(image)
+            draw.rounded_rectangle((75,180,437,340),radius=20,fill='#f1b91e',outline='#7e391c',width=8)
+            draw.ellipse((160,220,330,290),fill='#941f1f')
+            image.save(source)
+            with mock.patch.dict(os.environ, {'PSB_CUTOUT_BACKEND':'rembg','PSB_REMBG_MODEL':'u2netp','REMBG_HOME':str(root/'model-cache')}):
+                mode=render_sku.cutout(source,dest,ROOT/'scripts'/'macos_subject_mask.m',None)
+            self.assertEqual(mode,'rembg-u2netp-mask-original-rgb')
+            result=Image.open(dest).convert('RGBA')
+            self.assertEqual(result.size,image.size)
+            self.assertEqual(result.convert('RGB').tobytes(),image.tobytes())
+            self.assertEqual(result.getchannel('A').getextrema(),(0,255))
+
     @unittest.skipUnless(sys.platform == 'win32', 'Windows-only batch launcher')
     def test_windows_batch_launcher_accepts_unicode_path(self):
         with tempfile.TemporaryDirectory(prefix='产品图 ') as temp:

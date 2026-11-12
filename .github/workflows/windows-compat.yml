@@ -24,5 +24,6 @@ jobs:
         shell: pwsh
         env:
           PYTHONUTF8: '1'
+          PSB_RUN_MODEL_TESTS: '1'
           PYTHONDONTWRITEBYTECODE: '1'
         run: python -m unittest discover -s skills/psb-template-product-swap/tests -v
