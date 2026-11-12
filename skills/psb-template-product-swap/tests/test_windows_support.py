@@ -121,7 +121,7 @@ class WindowsSupportTests(unittest.TestCase):
     def test_windows_batch_launcher_accepts_unicode_path(self):
         with tempfile.TemporaryDirectory(prefix='产品图 ') as temp:
             env={**os.environ, 'PSB_PYTHON':sys.executable, 'PYTHONUTF8':'1'}
-            command=f'""{ROOT / "run.bat"}" --help"'
+            command=f'"{ROOT / "run.bat"}" --help'
             result=subprocess.run(command, shell=True, cwd=temp, env=env, capture_output=True, text=True, encoding='utf8')
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('--sku', result.stdout)
