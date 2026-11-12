@@ -34,7 +34,7 @@ jobs:
           try {
             $cache = (npm config get cache).Trim()
             Write-Host "Node: $(node --version); npm: $(npm --version); npx: $((Get-Command npx).Source)"
-            & npx --yes 'skills@1.8.1' add $source --skill '*' --agent codex --copy --yes
+            npx --yes 'skills@1.8.1' add $source --skill '*' --agent codex --copy --yes
             if ($LASTEXITCODE -ne 0) {
               $code = $LASTEXITCODE
               Get-ChildItem (Join-Path $cache '_logs') -Filter '*debug-0.log' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 | Get-Content -Tail 80

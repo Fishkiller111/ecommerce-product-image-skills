@@ -36,10 +36,12 @@ $Skill = Join-Path (Get-Location) '.agents\skills\psb-template-product-swap'
 py -3.12 -m venv .venv-product-skills
 & '.\.venv-product-skills\Scripts\python.exe' -m pip install -r (Join-Path $Skill 'requirements-windows.txt')
 $env:PSB_PYTHON = (Resolve-Path '.\.venv-product-skills\Scripts\python.exe').Path
+$env:PSB_SKILL_DIR = $Skill
+$env:PYTHONUTF8 = '1'
 & (Join-Path $Skill 'run.bat') 'C:\素材\商品.jpg' --sku SKU001 --text-json 'C:\素材\文案.json'
 ```
 
-`$Skill` 和示例路径按实际安装位置、文件名调整；输入中文及带空格路径须加引号。无需启用 PowerShell 脚本执行策略；退出 PowerShell 后应重新配置当前会话的 `PSB_PYTHON`，或让 Codex 直接调用虚拟环境的 Python。
+`$Skill` 和示例路径按实际安装位置、文件名调整；输入中文及带空格路径须加引号。无需启用 PowerShell 脚本执行策略；退出 PowerShell 后应重新配置当前会话的 `PSB_PYTHON`、`PSB_SKILL_DIR` 和 `PYTHONUTF8`，或让 Codex 直接调用虚拟环境的 Python。
 
 Windows 自动抠图使用本地 CPU 蒙版（rembg + ONNX Runtime，默认 `u2netp`），只对原始商品 RGB 增加 alpha，不将商品图片上传至抠图服务。第一次使用需联网下载对应权重；白色软管、多个商品、边缘及阴影仍须人工检查。可设置 `PSB_REMBG_MODEL=u2net` 使用较大模型；不得使用云端模型冒充本地处理。模型及训练数据许可独立于代码，商业使用前由使用者确认。未联网、缺少运行库或蒙版异常时中止，改用已确认透明 PNG；不可把空白结果当成功。
 
