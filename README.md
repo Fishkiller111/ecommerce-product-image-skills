@@ -5,18 +5,18 @@
 | 技能 | 用途 |
 | --- | --- |
 | `ecommerce-template-workflow` | 总领流程：本地主图套版、图文详情图和双商品同平面拼图 |
-| `ai-ecommerce-product-images` | 原图白底处理及商品保真检查 |
+| `ai-ecommerce-product-images` | 可选：用户选用 APIMart 时的生成式修复和场景图 |
 | `psb-template-product-swap` | 透明商品素材处理和固定 PSB 母版套版 |
 
 ## 安装
 
-需要 Node.js 22.20 或更新版本。在目标项目目录运行：
+需要 Node.js 22.20 或更新版本，以及终端可调用的 Git。在目标项目目录运行：
 
 ```bash
 npx skills add Fishkiller111/ecommerce-product-image-skills
 ```
 
-按提示选择三个技能和需要使用的 Agent。Windows PowerShell 若提示 `npx.ps1` 被执行策略阻止，可改用 `npx.cmd skills add Fishkiller111/ecommerce-product-image-skills`，无需修改执行策略。
+按提示选择 `ecommerce-template-workflow` 和 `psb-template-product-swap` 即可走本地或 GPT 内置生图；只有需要 APIMart 分支时才需另选 `ai-ecommerce-product-images`。Windows PowerShell 若提示 `npx.ps1` 被执行策略阻止，可改用 `npx.cmd skills add Fishkiller111/ecommerce-product-image-skills`，无需修改执行策略。
 
 需要在 Codex 全局安装时，可使用：
 
@@ -30,10 +30,30 @@ npx skills add Fishkiller111/ecommerce-product-image-skills --skill '*' --agent 
 - **详情图**：提供标题、卖点或构图参考；例如“做竖版详情图，商品居中，标题写‘商品展示’”。
 - **拼图**：提供两张真实商品原图；例如“拼图，图一在上、图二在下”。上下关系用同一地面上的前后错位表达，左右排列时底部对齐；两件商品各自保留接触阴影，不做无支撑的上下堆叠。
 
+## Codex 快速更新
+
+**已安装旧版？把对应系统的一行发给 Codex，让它在原先安装 Skill 的项目根目录执行。** 这是从 GitHub 重新安装指定 Skill 的更新命令，不要求旧版有 `skills-lock.json`。命令会覆盖这两个同名技能目录；有手工改动请先备份。
+
+macOS / Linux：
+
+```bash
+npx --yes skills@1.8.1 add Fishkiller111/ecommerce-product-image-skills --skill ecommerce-template-workflow psb-template-product-swap --agent codex --copy --yes
+```
+
+Windows PowerShell（用 `npx.cmd`，无需改执行策略）：
+
+```powershell
+npx.cmd --yes skills@1.8.1 add Fishkiller111/ecommerce-product-image-skills --skill ecommerce-template-workflow psb-template-product-swap --agent codex --copy --yes
+```
+
+- **原来是全局安装**：在同一条命令末尾加 `--global`。否则不要加，以免留下项目级和全局两份。
+- **已装 APIMart 可选分支**：可把 `ai-ecommerce-product-images` 加到 `--skill` 的两个技能名之后、`--agent` 之前一起更新；没装则不用加。更新不会调用图片服务，也不要求 API Key。
+- 安装完成后新开一个 Codex 会话，再调用 `$ecommerce-template-workflow`。若要确认更新成功，检查该技能目录里有 `references/image-generation.md`。
+
 ## 运行条件和边界
 
 - 总领流程默认在本机生成主图、详情图或拼图预览，不需要 APIMart，也不上传原照。原图细节不足时，PNG 只能用于版式复核，不能作为上架成品。
-- 单独使用生成式商品图处理或明确要求 AI 修复时，须先确认外部处理权限；APIMart 需自备 `APIMART_API_KEY` 和 `APIMART_BASE_URL`，或使用 Agent 中已配置的工具。不要提交密钥；调用可能上传商品图并产生费用。
+- 需要 AI 生成背景或修图时，默认使用当前 GPT 会话的内置图片工具，不需 APIMart 或 OpenAI API Key。只有主动选用、已配置并授权时才调用 APIMart；不要在对话粘贴密钥。没有内置工具时可继续本地流程，不会自动转用付费接口。
 - macOS：Python 3.11+、`requirements.txt`、系统中文字体；自动抠图需 macOS 14+ Vision 和 Xcode Command Line Tools。Windows 10 64 位：建议 Python 3.12 64 位和 `requirements-windows.txt`，使用 `run.bat` 或直接用 Python 运行。Windows 本地 CPU 抠图基于 rembg/ONNX Runtime，仅生成蒙版；首次使用需联网下载 `u2netp` 模型。Windows 字体缺失、ONNX DLL 缺失或自动抠图失败时应先解决依赖或使用已核对的透明 PNG。模型权重和训练数据许可应另行核对。具体命令见套版 Skill。
 - Windows Server CI 测试不代表 Windows 10 真机已经验收；部署前请在目标设备执行真实素材的抠图、中文排版和上架复核。
 - 包含固定 PSB 母版及其原有版式和品牌文字；请确认使用场景和授权。模板采用文件哈希与图层配置校验，不能随意替换。
