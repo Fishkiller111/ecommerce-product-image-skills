@@ -1,11 +1,17 @@
 ---
 name: ai-ecommerce-product-images
-description: APIMart 专用的商品白底修复与场景图流程。仅在用户主动选择并已配置、授权 APIMart 时使用；常规本地商品图或 GPT 内置生图使用 ecommerce-template-workflow。
+description: 真实商品白底图和透明抠图默认使用 GPT 内置图片编辑并逐项核验包装；APIMart 仅在用户明确选择并授权时使用。
 ---
 
 # 电商商品图制作
 
-本技能是可选的 APIMart 专用分支，不是总领流程的依赖。没配置或没选择 APIMart 时，使用同级 `ecommerce-template-workflow` 的 [图片生成与复核](../ecommerce-template-workflow/references/image-generation.md)，不要为了继续而要求用户开通 APIMart。
+白底图和透明抠图默认使用当前会话的 GPT 内置图片编辑，不因 Mac 或 Windows 切换处理方式；未明确选择 APIMart 时不调用它，也不要求用户开通。完整步骤和保真验收以本技能的 [GPT 内置商品抠图流程](references/gpt-cutout.md) 为准。
+
+## 仅需白底图或透明图
+
+只要求白底图或透明图时，不自动制作场景图；按 [GPT 内置商品抠图流程](references/gpt-cutout.md) 逐张调用图片编辑并复核。生成式结果可能改写包装，不能宣称天然保真或完全消除随机性；工具不可用不静默换工具。仅当用户要求本地或不上传时才使用本地白底流程。
+
+## 以下为 APIMart 专用分支：仅用户明确选择并授权时执行
 
 ## 目标
 

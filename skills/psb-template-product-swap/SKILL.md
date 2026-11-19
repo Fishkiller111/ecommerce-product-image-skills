@@ -27,6 +27,21 @@ description: 无需 Photoshop，按固定抖音 PSB 母版换品、换文案。�
 - **文字**：仅使用客户确认或可从包装核对的描述。`hero_title` / `hero_subtitle` 可在浅色区建立标题层级；不传则该区域只放商品。模板文字键为 `header`、`promo`、`badge`（两行，用 `\n`）、`tag_1`、`tag_2`、`tag_3`。示例见 [文案示例](examples/copy.json)。无新文案保留原文，未确认的模板促销和承诺不可对外发布。
 - **输出**：`outputs/psb-template-swap-direct/<SKU>/` 内有透明输入、入模素材、1440×1440 主图和复核 JSON。先看 `detail_review` 与 `publication`，再看 `studio_light`。在成图和原图间核对漏抠、过曝、光晕、包装细字和颜色；任何状态都不代替人工复核。每 SKU 独立目录，不覆盖结果。
 
+## 单独白底图与透明图：仅用户明确要求本地处理时
+
+普通白底/透明抠图默认按同级 `ecommerce-template-workflow/references/gpt-cutout.md` 使用 GPT 内置图片编辑；不得因系统不同自动调用此处本地脚本。以下仅在用户明确要求本地处理、不上传或直接指定本脚本时使用。
+
+本地白底任务不套 PSB、不重绘包装，先用原片抠图，再调亮商品中间调、保留暗色印字和高光，并做有界锐化；透明图和纯白图分别输出。原始细字无法通过锐化恢复，上架前必须对照原图逐项检查文字、颜色、轮廓和边缘。`--keep-product-look` 可关闭调光锐化。输出目录必须不存在，不覆盖已有文件。
+
+Windows PowerShell（先按下节安装依赖）：
+
+```powershell
+$Skill = Join-Path (Get-Location) ".agents\skills\psb-template-product-swap"
+& ".\.venv-product-skills\Scripts\python.exe" (Join-Path $Skill "scripts\white_background.py") "C:\素材\商品.jpg" --out "C:\输出\商品白底_001"
+```
+
+macOS：使用 `run.sh` 里配置的 Python 及 `PYTHONPATH`，运行 `scripts/white_background.py SOURCE --out NEW_DIR`。输出 `white.png`、`transparent.png`、`review.json`；检查商品发暗、过曝、暗边及文字，不能因运行成功就标记验收通过。Windows 使用本机 rembg 蒙版，首次可能下载权重，缺依赖或分割失败须报告；不要将其说成 Vision。
+
 ## Windows 10 64 位安装与运行
 
 在培训项目根目录的 PowerShell 中执行（`py` 为 Python Launcher；使用 Python 3.12 64 位）：
