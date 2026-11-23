@@ -43,11 +43,13 @@ jobs:
             foreach ($name in @('ai-ecommerce-product-images', 'ecommerce-template-workflow', 'psb-template-product-swap')) {
               if (!(Test-Path (Join-Path $target ".agents\skills\$name\SKILL.md"))) { throw "Missing skill $name" }
             }
-            foreach ($name in @('ai-ecommerce-product-images', 'ecommerce-template-workflow')) {
-              $skill = Join-Path $target ".agents\skills\$name"
-              $protocol = Join-Path $skill 'references\gpt-cutout.md'
-              if (!(Test-Path $protocol) -or !(Test-Path (Join-Path $skill 'scripts\composite_white.py'))) { throw "Missing GPT cutout protocol or script for $name" }
-              if (-not (Select-String -Path $protocol -SimpleMatch 'v2026-11-19-gpt-cutout-1' -Quiet)) { throw "Wrong GPT cutout protocol version for $name" }
+            $workflow = Join-Path $target '.agents\skills\ecommerce-template-workflow'
+            $protocol = Join-Path $workflow 'references\gpt-cutout.md'
+            if (!(Test-Path $protocol) -or !(Test-Path (Join-Path $workflow 'scripts\composite_white.py'))) { throw "Missing workflow GPT cutout support" }
+            if (-not (Select-String -Path $protocol -SimpleMatch 'v2026-11-19-gpt-cutout-1' -Quiet)) { throw "Wrong workflow GPT cutout protocol version" }
+            $cutout = Join-Path $target '.agents\skills\ai-ecommerce-product-images'
+            foreach ($path in @('scripts\local_product.py', 'scripts\finish_recipe.py', 'references\reference-finishing.md', 'examples\carton-2f251bc.json')) {
+              if (!(Test-Path (Join-Path $cutout $path))) { throw "Missing local cutout file $path" }
             }
             $installed = Join-Path $target '.agents\skills\psb-template-product-swap'
             foreach ($path in @('requirements-windows.txt', 'scripts\platform_support.py', 'scripts\cutout_product.py', 'scripts\white_background.py')) {
@@ -64,18 +66,19 @@ jobs:
           PSB_RUN_MODEL_TESTS: '1'
           PYTHONDONTWRITEBYTECODE: '1'
         run: python -m unittest discover -s skills/psb-template-product-swap/tests -v
-      - name: Test installed GPT cutout white compositing and transparency checks
+      - name: Test installed local cutout and workflow GPT compositing
         shell: pwsh
         env:
           PYTHONUTF8: '1'
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           $target = Join-Path $env:RUNNER_TEMP '技能 安装 test'
-          foreach ($name in @('ai-ecommerce-product-images', 'ecommerce-template-workflow')) {
-            $tests = Join-Path $target ".agents\skills\$name\tests"
-            python -m unittest discover -s $tests -p 'test_composite_white.py' -v
-            if ($LASTEXITCODE -ne 0) { throw "Installed GPT cutout support test failed: $name" }
-          }
+          $localTests = Join-Path $target '.agents\skills\ai-ecommerce-product-images\tests'
+          python -m unittest discover -s $localTests -v
+          if ($LASTEXITCODE -ne 0) { throw "Installed local cutout tests failed" }
+          $workflowTests = Join-Path $target '.agents\skills\ecommerce-template-workflow\tests'
+          python -m unittest discover -s $workflowTests -p 'test_composite_white.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Installed workflow GPT compositing tests failed" }
       - name: Check installed batch launcher
         shell: pwsh
         env:
@@ -121,8 +124,10 @@ jobs:
             foreach ($name in @('ai-ecommerce-product-images', 'ecommerce-template-workflow', 'psb-template-product-swap')) {
               if (!(Test-Path (Join-Path $target ".agents\skills\$name\SKILL.md"))) { throw "Missing fallback skill $name" }
             }
-            foreach ($name in @('ai-ecommerce-product-images', 'ecommerce-template-workflow')) {
-              $protocol = Join-Path $target ".agents\skills\$name\references\gpt-cutout.md"
-              if (!(Test-Path $protocol) -or -not (Select-String -Path $protocol -SimpleMatch 'v2026-11-19-gpt-cutout-1' -Quiet)) { throw "Public install has wrong GPT cutout version: $name" }
+            $protocol = Join-Path $target '.agents\skills\ecommerce-template-workflow\references\gpt-cutout.md'
+            if (!(Test-Path $protocol) -or -not (Select-String -Path $protocol -SimpleMatch 'v2026-11-19-gpt-cutout-1' -Quiet)) { throw "Public install has wrong workflow GPT cutout version" }
+            $cutout = Join-Path $target '.agents\skills\ai-ecommerce-product-images'
+            foreach ($path in @('scripts\local_product.py', 'scripts\finish_recipe.py', 'references\reference-finishing.md')) {
+              if (!(Test-Path (Join-Path $cutout $path))) { throw "Public install is missing $path" }
             }
           } finally { Pop-Location }

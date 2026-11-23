@@ -5,7 +5,7 @@
 | 技能 | 用途 |
 | --- | --- |
 | `ecommerce-template-workflow` | 总领流程：GPT 内置白底/透明抠图，本地主图套版、图文详情图和双商品同平面拼图 |
-| `ai-ecommerce-product-images` | 默认 GPT 内置白底/透明抠图及人工复核；APIMart 为显式选择的独立分支 |
+| `ai-ecommerce-product-images` | 本地商品抠图、参考图取样调色、精修边缘，输出配套白底与透明 PNG |
 | `psb-template-product-swap` | 透明商品素材处理和固定 PSB 母版套版 |
 
 ## 安装
@@ -48,11 +48,12 @@ npx.cmd --yes skills@1.8.1 add Fishkiller111/ecommerce-product-image-skills --sk
 
 - **原来是全局安装**：在同一条命令末尾加 `--global`。否则不要加，以免留下项目级和全局两份。
 - 命令包含 `ai-ecommerce-product-images`，以同步直接点名的白底技能。更新不会调用图片服务，也不要求 API Key。若原来有多个同名副本，先确认实际生效位置。
-- 安装完成后新开一个 Codex 会话，再调用 `$ai-ecommerce-product-images` 或 `$ecommerce-template-workflow`。若要确认更新成功，检查相应技能目录的 `references/gpt-cutout.md` 中包含 `v2026-11-19-gpt-cutout-1`。
+- 安装完成后新开一个 Codex 会话，调用 `$ai-ecommerce-product-images`，提供商品原照及可选参考图。新版安装目录内含 `scripts/finish_recipe.py` 和 `references/reference-finishing.md`。
 
 ## 运行条件和边界
 
-- 单独白底/透明抠图默认使用 GPT 内置图片编辑，照片会交由 GPT 图像服务处理；同一提示词不保证结果一致，必须逐项核验包装，改字或无法核验不可作为保真成品。固定 PSB 套版、基础详情和拼图按其各自流程执行。仅本地或不上传须按用户要求执行。
+- 本地抠图使用 Python 3、Pillow 和 NumPy。参考取样调色需要 OpenCV，边缘去灰需要 SciPy。用保存的蒙版、轮廓和色样复跑时核对原图指纹，步骤见 [参考调色与修边](skills/ai-ecommerce-product-images/references/reference-finishing.md)。
+- 总领工作流的单独白底/透明抠图默认使用 GPT 内置图片编辑，照片会交由 GPT 图像服务处理；同一提示词不保证结果一致，必须逐项核验包装，改字或无法核验不可作为保真成品。固定 PSB 套版、基础详情和拼图按其各自流程执行。仅本地或不上传须按用户要求执行。
 - 使用 GPT 白底流程须确认当前会话确实提供内置图片编辑工具，Skill 本身不提供该工具；不可用时停止并说明，不静默降级。只有主动选用、已配置并授权时才调用 APIMart；不要在对话粘贴密钥。
 - macOS：Python 3.11+、`requirements.txt`、系统中文字体；自动抠图需 macOS 14+ Vision 和 Xcode Command Line Tools。Windows 10 64 位：建议 Python 3.12 64 位和 `requirements-windows.txt`，使用 `run.bat` 或直接用 Python 运行。Windows 本地 CPU 抠图基于 rembg/ONNX Runtime，仅生成蒙版；首次使用需联网下载 `u2netp` 模型。Windows 字体缺失、ONNX DLL 缺失或自动抠图失败时应先解决依赖或使用已核对的透明 PNG。模型权重和训练数据许可应另行核对。具体命令见套版 Skill。
 - Windows Server CI 测试不代表 Windows 10 真机已经验收；部署前请在目标设备执行真实素材的抠图、中文排版和上架复核。
