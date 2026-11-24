@@ -75,27 +75,34 @@ def local_mask(source, im, backend, model, rect, supplied, tmp):
     raise ValueError('未知蒙版来源')
 
 
-def adjust(rgba, strength, sharpness):
+def adjust(rgba, strength, sharpness, *, reference_palette=False):
     arr=np.array(rgba.convert('RGBA')); rgb=arr[:,:,:3].astype(np.float32)/255.; alpha=arr[:,:,3]
     solid=alpha>=240
     if solid.sum()<16: raise ValueError('蒙版中没有足够的不透明商品区域')
     y=rgb @ np.array([.2126,.7152,.0722],dtype=np.float32)
     med=float(np.median(y[solid])); target=.74
-    gamma=float(np.clip(math.log(target)/math.log(max(.03,min(.97,med))),.48,1.0)) if med<target else 1.0
+    # Preserve the base curve documented by existing reference recipes.
+    min_gamma = .48 if reference_palette else .44
+    gamma=float(np.clip(math.log(target)/math.log(max(.03,min(.97,med))),min_gamma,1.0)) if med<target else 1.0
     gamma=max(.42,1+(gamma-1)*strength)
     # Lift luminance with a shared RGB ratio, protecting hue and saturation.
     target_y=np.power(y, gamma)
     ratio=target_y/np.maximum(y,1e-5)
     headroom=np.maximum(1.0,.98/np.maximum(rgb.max(2),1e-5))
     lifted=rgb*np.minimum(ratio,headroom)[:,:,None]
-    # Protect dark printing; shift gently rather than reconstruct texture.
-    guard=np.clip((y-.13)/.32,0,1)[:,:,None]
+    # Retain contrast in dark printing as the surrounding stock brightens.
+    shadow_start, shadow_range = (.13, .32) if reference_palette else (.10, .30)
+    guard=np.clip((y-shadow_start)/shadow_range,0,1)[:,:,None]
     lit=rgb+(lifted-rgb)*guard
     lum=lit @ np.array([.2126,.7152,.0722],dtype=np.float32)
     chroma=lit.max(2)-lit.min(2)
     sat=chroma/np.maximum(lit.max(2),1e-5)
-    # Vibrance affects existing chroma only, avoids changing neutral packaging.
-    amount=(.32*strength*(1-sat*.65))[:,:,None]
+    if reference_palette:
+        amount = .32*strength*(1-sat*.65)
+    else:
+        # Large exposure lifts naturally increase channel separation.
+        amount = .20*strength*(1-sat*.65)-.30*np.maximum(lum-y,0)
+    amount = amount[:,:,None]
     delta=(lit-lum[:,:,None])*amount
     safe_up=np.where(delta>0,(1-lit)/np.maximum(delta,1e-6),100)
     safe_dn=np.where(delta<0,lit/np.maximum(-delta,1e-6),100)
@@ -111,8 +118,26 @@ def adjust(rgba, strength, sharpness):
         delta=np.clip(boosted-before.astype(np.int16),-8,8)
         safe=np.asarray(Image.fromarray(alpha).filter(ImageFilter.MinFilter(5)))>=250
         arr[:,:,:3]=np.clip(before.astype(np.int16)+delta*safe[:,:,None],0,255).astype('uint8')
-    after=arr[:,:,:3].astype(np.float32) @ np.array([.2126,.7152,.0722],dtype=np.float32)
-    return Image.fromarray(arr), {'median_luma_before':round(med*255,1),'median_luma_after':round(float(np.median(after[solid])),1),'gamma':round(gamma,3),'strength':strength,'sharpness':sharpness,'alpha_unchanged':True}
+    tone = {
+        'method': 'adaptive' if strength else 'preserve-exposure-and-color',
+        'gamma': round(gamma,3),
+        'strength': strength,
+        'sharpness': sharpness,
+        'alpha_unchanged': True,
+    }
+    return Image.fromarray(arr), tone
+
+
+def tone_measurements(raw, enhanced):
+    """Measure source and exported tone over the same opaque subject pixels."""
+    solid = np.asarray(raw.getchannel('A')) >= 240
+    weights = np.array([.2126,.7152,.0722],dtype=np.float32)
+    stats = {}
+    for name, image in [('before', raw), ('after', enhanced)]:
+        colors = np.asarray(image)[solid, :3]
+        stats['median_luma_'+name] = round(float(np.median(colors @ weights)), 1)
+        stats['median_chroma_'+name] = round(float(np.median(np.ptp(colors, axis=1))), 1)
+    return stats
 
 
 def main():
@@ -167,12 +192,13 @@ def main():
         raise ValueError('蒙版触及画布角落，可能残留背景；请修正蒙版')
     im.putalpha(mask)
     raw=im.crop(bbox)
-    enhanced,tone=adjust(raw,a.strength,a.sharpness)
+    enhanced,tone=adjust(raw,a.strength,a.sharpness,reference_palette=samples is not None)
     if samples is not None:
         enhanced=palette_grade(raw,samples,bbox[:2],enhanced)
         tone.update(method='reference-palette',samples=len(samples))
     if fringe:
         enhanced=remove_fringe(enhanced,fringe)
+    tone.update(tone_measurements(raw,enhanced))
     # Native master preserves source pixels and provides a reliable basis for review.
     scale=min(a.size*a.fill/max(enhanced.size),a.upscale_limit)
     target=enhanced.resize(tuple(max(1,round(v*scale)) for v in enhanced.size),Image.Resampling.LANCZOS)
@@ -186,6 +212,6 @@ def main():
     if a.finish_recipe:
         report.update(finish_recipe=str(a.finish_recipe.resolve()),decontaminate_px=fringe)
     (out/'review.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
-    print(json.dumps({'transparent':str(out/'transparent.png'),'white':str(out/'white.png'),'native':str(out/'native_enhanced_rgba.png'),'mask':str(out/'mask.png'),'review':'待人工复核','method':mode},ensure_ascii=False))
+    print(json.dumps({'transparent':str(out/'transparent.png'),'white':str(out/'white.png'),'native':str(out/'native_enhanced_rgba.png'),'mask':str(out/'mask.png'),'review':'待人工复核','method':mode,'tone':tone},ensure_ascii=False))
 
 if __name__=='__main__': main()

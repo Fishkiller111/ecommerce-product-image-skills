@@ -34,6 +34,12 @@ class LocalProductTest(unittest.TestCase):
         src=self.root/'source.png';Image.new('RGB',(100,80),(120,80,50)).save(src)
         mask=Image.new('L',(100,80),0); ImageDraw.Draw(mask).rectangle((25,10,75,70),fill=255); mask.save(self.root/'mask.png')
         self.run_tool(src,'--out',self.root/'good','--mask',self.root/'mask.png','--size','256')
+        tone=json.loads((self.root/'good'/'review.json').read_text())['tone']
+        self.assertGreater(tone['median_luma_after'],tone['median_luma_before']+15)
+        self.assertGreater(tone['median_chroma_after'],tone['median_chroma_before'])
+        with Image.open(self.root/'good'/'white.png') as white, Image.open(self.root/'good'/'transparent.png') as transparent:
+            self.assertEqual(white.getpixel((128,128)),transparent.getpixel((128,128))[:3])
+            self.assertNotEqual(white.getpixel((128,128)),(120,80,50))
         bad=self.root/'bad.png'; Image.new('L',(4,4),255).save(bad)
         self.run_tool(src,'--out',self.root/'bad','--mask',bad,ok=False)
         self.assertFalse((self.root/'bad').exists())
