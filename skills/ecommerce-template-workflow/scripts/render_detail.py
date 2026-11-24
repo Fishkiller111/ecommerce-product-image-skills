@@ -120,11 +120,11 @@ def wrap(draw, text, font, width):
     return lines
 
 
-def fitted(draw, text, rect, max_size, min_size, max_lines, color, center=True, role='hero'):
+def fitted(draw, text, rect, max_size, min_size, max_lines, color, center=True, role='hero', font_loader=load_font):
     x0,y0,x1,y1 = [round(v) for v in rect]
     width=x1-x0; height=y1-y0
     for size in range(max_size,min_size-1,-1):
-        font=load_font(role,size)
+        font=font_loader(role,size)
         lines=wrap(draw,text,font,width)
         spacing=max(2,round(size*.24))
         # Font bounding boxes may start below the baseline: measure actual bbox.
