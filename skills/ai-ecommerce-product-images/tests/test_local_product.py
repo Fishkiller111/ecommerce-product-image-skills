@@ -1,4 +1,7 @@
+import hashlib
+import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -43,5 +46,45 @@ class LocalProductTest(unittest.TestCase):
         bad=self.root/'bad.png'; Image.new('L',(4,4),255).save(bad)
         self.run_tool(src,'--out',self.root/'bad','--mask',bad,ok=False)
         self.assertFalse((self.root/'bad').exists())
+
+    @unittest.skipUnless(importlib.util.find_spec('cv2'), 'reference palettes require OpenCV')
+    def test_default_run_and_remasking_keep_the_matching_palette(self):
+        install = self.root / 'skill'
+        scripts = install / 'scripts'
+        examples = install / 'examples'
+        scripts.mkdir(parents=True)
+        examples.mkdir()
+        for name in ('local_product.py', 'finish_recipe.py'):
+            shutil.copyfile(SCRIPT.with_name(name), scripts / name)
+        source = self.root / 'original.png'
+        Image.new('RGB', (100, 80), (120, 80, 50)).save(source)
+        recipe = examples / 'confirmed.json'
+        recipe.write_text(json.dumps({
+            'source_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
+            'auto_apply': True,
+            'outline': [[25, 10], [75, 10], [75, 70], [25, 70]],
+            'palette': [{'source': [120, 80, 50], 'target': [222, 170, 80]}],
+        }))
+        mask_path = self.root / 'updated-mask.png'
+        mask = Image.new('L', (100, 80))
+        ImageDraw.Draw(mask).rectangle((30, 15, 70, 65), fill=255)
+        mask.save(mask_path)
+
+        for name, args, backend, method in (
+            ('default', [], 'source-traced-outline', 'reference-palette'),
+            ('remasked', ['--mask', str(mask_path)], 'user-mask', 'reference-palette'),
+            ('keep-color', ['--strength', '0'], 'source-traced-outline', 'preserve-exposure-and-color'),
+        ):
+            with self.subTest(name=name):
+                out = self.root / name
+                result = subprocess.run(
+                    [sys.executable, str(scripts / SCRIPT.name), str(source), '--out', str(out), *args],
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                report = json.loads((out / 'review.json').read_text())
+                self.assertEqual(Path(report['finish_recipe']), recipe.resolve())
+                self.assertEqual(report['mask_backend'], backend)
+                self.assertEqual(report['tone']['method'], method)
 
 if __name__=='__main__': unittest.main()

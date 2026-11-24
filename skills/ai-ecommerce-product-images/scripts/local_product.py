@@ -140,13 +140,31 @@ def tone_measurements(raw, enhanced):
     return stats
 
 
+def load_recipe(source_sha, explicit_path):
+    """Resolve a recipe for the exact source, preferring a caller's explicit choice."""
+    candidates = [explicit_path] if explicit_path else sorted(
+        (Path(__file__).resolve().parents[1] / 'examples').glob('*.json')
+    )
+    for path in candidates:
+        recipe = json.loads(path.read_text(encoding='utf-8-sig'))
+        if (
+            isinstance(recipe, dict)
+            and recipe.get('source_sha256') == source_sha
+            and (explicit_path or recipe.get('auto_apply') is True)
+        ):
+            return recipe, path
+    if explicit_path:
+        raise ValueError('精修配方与本张原图的 SHA-256 不匹配')
+    return {}, None
+
+
 def main():
     p=argparse.ArgumentParser(description='在本机抠图、可控修边和非生成式提亮调色。')
     p.add_argument('source',type=Path); p.add_argument('--out',type=Path,required=True)
     p.add_argument('--backend',choices=['auto','alpha','vision','rembg','grabcut'],default='auto')
     p.add_argument('--model',choices=['u2net','u2netp'],default='u2net')
     p.add_argument('--mask',type=Path,help='人工修正的同尺寸灰度或 RGBA 蒙版 PNG')
-    p.add_argument('--finish-recipe',type=Path,help='可选的原图专用精修 JSON，可指定描边、取样调色和去灰边')
+    p.add_argument('--finish-recipe',type=Path,help='指定原图专用精修 JSON；默认按原图 SHA-256 查找内置配方')
     p.add_argument('--rect',type=int,nargs=4,metavar=('X','Y','WIDTH','HEIGHT'))
     p.add_argument('--contract',type=int,default=0,help='蒙版向内收缩像素；默认 0，防止缺边')
     p.add_argument('--feather',type=float,default=0,help='蒙版羽化半径；默认 0')
@@ -162,16 +180,18 @@ def main():
     source=a.source.expanduser().resolve(strict=True); out=a.out.expanduser().absolute()
     if out.exists(): p.error('输出目录已存在，不能覆盖')
     sha=hashlib.sha256(source.read_bytes()).hexdigest()
-    recipe={}
-    if a.finish_recipe:
-        recipe=json.loads(a.finish_recipe.read_text(encoding='utf-8-sig'))
-        if not isinstance(recipe,dict) or recipe.get('source_sha256') != sha:
-            p.error('精修配方与本张原图的 SHA-256 不匹配')
+    try:
+        recipe, recipe_path = load_recipe(sha, a.finish_recipe)
+    except (OSError, ValueError) as exc:
+        p.error(str(exc))
     outline=recipe.get('outline')
-    samples=recipe.get('palette')
+    samples=recipe.get('palette') if a.strength else None
     fringe=recipe.get('decontaminate_px',0)
     if type(fringe) not in (int,float) or not 0<=fringe<=3:
         p.error('decontaminate_px 须介于 0 和 3 之间')
+    if not a.finish_recipe and (a.mask or a.backend != 'auto'):
+        # Keep the matched color treatment when the caller supplies a new silhouette.
+        outline, fringe = None, 0
     if outline is not None and a.mask:
         p.error('精修轮廓和 --mask 只能选用一项')
     with Image.open(source) as src:
@@ -209,8 +229,8 @@ def main():
     mask.save(out/'mask.png');raw.save(out/'native_original_rgba.png');enhanced.save(out/'native_enhanced_rgba.png')
     trans.save(out/'transparent.png');white.save(out/'white.png');dark.save(out/'preview_dark.png')
     report={'source':str(source),'source_sha256':sha,'source_size':list(im.size),'subject_bbox':list(bbox),'mask_backend':mode,'contract_px':a.contract,'feather_px':a.feather,'matte_blackpoint':a.matte_blackpoint,'matte_whitepoint':a.matte_whitepoint,'tone':tone,'canvas':a.size,'actual_subject_px':list(target.size),'upscale_ratio':round(scale,3),'review_status':'待人工复核','note':'保留原商品像素进行调色；插值不可创造细节。须核对文字、包装边缘及色彩。'}
-    if a.finish_recipe:
-        report.update(finish_recipe=str(a.finish_recipe.resolve()),decontaminate_px=fringe)
+    if recipe_path:
+        report.update(finish_recipe=str(recipe_path.resolve()),decontaminate_px=fringe)
     (out/'review.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
     print(json.dumps({'transparent':str(out/'transparent.png'),'white':str(out/'white.png'),'native':str(out/'native_enhanced_rgba.png'),'mask':str(out/'mask.png'),'review':'待人工复核','method':mode,'tone':tone},ensure_ascii=False))
 
