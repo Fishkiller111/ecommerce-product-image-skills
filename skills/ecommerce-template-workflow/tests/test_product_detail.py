@@ -220,7 +220,8 @@ check_product_layers(changed, [((0, 0), asset, expected)])
         }
         usage = {
             'kind':'usage', 'title':'使用说明', 'background':scene.name,
-            'scene_layout':{'copy_position':'right'},
+            'scene_layout':{'copy_position':'right',
+                            'footer':{'text':'规格 18g/支','source':'示例包装'}},
             'product_layers':[{'image':self.src.name,'anchor':[.27,.79],'height':.45}],
             'items':[{'label':'示例','text':'已核对文字','source':'示例包装'}],
         }
@@ -230,6 +231,7 @@ check_product_layers(changed, [((0, 0), asset, expected)])
         pages = json.loads(Path(data['report']).read_text())['pages']
         self.assertEqual([page['size'] for page in pages], [[600,750],[600,750]])
         self.assertEqual(pages[0]['scene_layout']['highlight']['source'], '示例包装')
+        self.assertEqual(pages[1]['scene_layout']['footer']['text'], '规格 18g/支')
         for page in pages:
             self.assertTrue(Path(page['canny_guide']).is_file())
             check = page['product_integrity'][0]
@@ -241,6 +243,13 @@ check_product_layers(changed, [((0, 0), asset, expected)])
         self.assertEqual(self.src.read_bytes(),original)
         with Image.open(data['long_image']) as joined:
             self.assertEqual(joined.size,(600,1500))
+
+        simple_hero = {
+            'kind':'hero', 'title':'产品名称', 'subtitle':'产品介绍',
+            'background':scene.name, 'scene_layout':{},
+        }
+        result = self.run_series([simple_hero])
+        self.assertEqual(result.returncode,0,result.stderr)
 
         usage['product_layers'][0]['anchor'] = [.70,.79]
         overlap = self.run_series([usage])

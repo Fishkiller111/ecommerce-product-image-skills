@@ -118,11 +118,12 @@ def read_manifest(path):
             normalized.append({'label': label, 'text': body, 'image': image, 'source': origin})
         if bg and kind == 'usage' and (not (product or layers) or any(item['image'] for item in normalized)):
             raise ValueError('usage 的独立背景仅用于无使用实拍的商品场景')
+        subtitle = valid_text(page.get('subtitle', ''), 'subtitle', True)
         if uses_scene_layout:
-            layout = read_scene_layout(page['scene_layout'], kind, normalized)
+            layout = read_scene_layout(page['scene_layout'], kind, normalized, subtitle)
         pages.append({
             'kind': kind, 'title': valid_text(page.get('title', PANEL_TITLES[kind]), 'title'),
-            'subtitle': valid_text(page.get('subtitle', ''), 'subtitle', True),
+            'subtitle': subtitle,
             'background': bg, 'items': normalized, 'product_layers': layers,
             **({'scene_layout': layout} if uses_scene_layout else {}),
         })
