@@ -10,7 +10,7 @@ def read_scene_layout(raw, kind, items, subtitle):
     }:
         raise ValueError('scene_layout 仅支持 tone、header、marker、highlight、copy_position、light、footer')
     tone = raw.get('tone', 'dark' if kind == 'hero' else 'light')
-    position = raw.get('copy_position', 'above')
+    position = raw.get('copy_position', 'left' if kind == 'reasons' else 'above')
     if tone not in ('dark', 'light') or position not in ('above', 'left', 'right'):
         raise ValueError('scene_layout 的 tone 或 copy_position 无效')
     highlight = raw.get('highlight')
@@ -70,7 +70,74 @@ def integrated_surface(canvas, rect, tint):
     canvas.paste(filtered, rect[:2], mask.filter(ImageFilter.GaussianBlur(scale*.85)))
 
 
+def draw_reasons_copy(panel, page):
+    layout = page.get('scene_layout', {})
+    dark = layout.get('tone') == 'dark'
+    ink = panel.paper if dark else panel.ink
+    tint = panel.ink if dark else panel.paper
+    header, marker = layout.get('header'), layout.get('marker')
+    regions = []
+
+    def write(value, box, size, minimum, *, bold=False, center=False, lines=1):
+        if value:
+            fitted(panel.draw, value, panel.rect(box), round(size*panel.w),
+                   round(minimum*panel.w), lines, ink, center=center,
+                   role='template' if bold else 'hero', font_loader=load_font)
+            regions.append(box)
+
+    write(header, (.16,.050,.84,.097), .031, .020, center=True)
+    write(marker, (.82,.05,.97,.097), .024, .017, center=True)
+    write(page['title'], (.075,.108,.925,.215), .083, .049, bold=True, center=True, lines=2)
+    write(page['subtitle'], (.10,.219,.90,.266), .034, .022, center=True)
+
+    position = layout.get('copy_position', 'above')
+    side = position in ('left', 'right')
+    columns = 2 if layout and not side else 1
+    span = .435 if side or columns == 2 else .84
+    items = page['items']
+    row_count = (len(items)+columns-1)//columns
+    stack = .28 if columns == 2 else .55
+    step = stack/row_count
+    cards = Image.new('RGBA', panel.canvas.size)
+    shapes = ImageDraw.Draw(cards)
+    boxes = []
+    for index, item in enumerate(items):
+        row, col = divmod(index, columns)
+        if side:
+            left = .075 if position == 'left' else .535
+        elif columns == 2:
+            left = .5-span/2 if col == 0 and index == len(items)-1 else .055+col*.455
+        else:
+            left = .08
+        top = .282+row*step
+        bottom = top+min(step-.017, .155)
+        box = (left, top, left+span, bottom)
+        x0,y0,x1,y1 = panel.rect(box)
+        shapes.rounded_rectangle((x0,y0,x1,y1), radius=max(4, round(panel.w*.036)),
+                                 fill=(*tint, 138), outline=(*ink, 76), width=max(1,panel.w//700))
+        boxes.append((item, box))
+    panel.canvas.alpha_composite(cards)
+
+    for item, (left, top, right, bottom) in boxes:
+        label, body = item['label'], item['text']
+        height = bottom-top
+        split = top+height*.53
+        if label and body:
+            write(label, (left+.028,top+.07*height,right-.023,split), .044, .024, bold=True, lines=2)
+            write(body, (left+.028,split,right-.023,bottom-.09*height), .031, .019, lines=2)
+        else:
+            write(label or body, (left+.028,top+.09*height,right-.023,bottom-.09*height),
+                  .040, .023, bold=bool(label), lines=2)
+        regions.append((left, top, right, bottom))
+    footer = layout.get('footer')
+    if footer:
+        write(footer['text'], (.087,.912,.913,.979), .027, .020, lines=2)
+    return [panel.rect(box) for box in regions]
+
+
 def draw_scene_copy(panel, page):
+    if page['kind'] == 'reasons':
+        return draw_reasons_copy(panel, page)
     layout = page['scene_layout']
     dark = layout['tone'] == 'dark'
     ink = '#fff0d1' if dark else '#3e231b'

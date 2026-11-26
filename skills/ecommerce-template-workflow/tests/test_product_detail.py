@@ -197,6 +197,54 @@ class ProductDetailTest(unittest.TestCase):
         self.assertNotEqual(run.returncode, 0)
         self.assertIn('label 或 text', run.stderr)
 
+    def test_default_detail_plan_renders_reasons_and_featured_ingredients(self):
+        scene = self.root/'scene.png'
+        photo = self.root/'ingredient.png'
+        Image.new('RGB', (600, 750), (212, 230, 209)).save(scene)
+        Image.new('RGB', (420, 300), (100, 112, 65)).save(photo)
+        pages = [
+            {'kind': 'hero', 'title': '测试商品'},
+            {'kind': 'reasons', 'background': scene.name, 'items': [
+                {'label': '旋盖开合', 'text': '用后可拧回管盖', 'source': '测试包装'},
+                {'text': '小支便携', 'source': '测试包装'},
+            ]},
+            {'kind': 'ingredients', 'layout': 'grid', 'featured': True, 'items': [
+                {'label': f'原料{i}', 'image': photo.name, 'source': '测试配料表'} for i in range(1, 8)
+            ]},
+        ]
+        run = self.run_series(pages, '--long')
+        self.assertEqual(run.returncode, 0, run.stderr)
+        result = json.loads(run.stdout)
+        report = json.loads(Path(result['report']).read_text())
+        self.assertEqual([p['kind'] for p in report['pages']], ['hero', 'reasons', 'ingredients'])
+        _, reasons, ingredients = report['pages']
+        self.assertEqual(reasons['scene_layout']['copy_position'], 'left')
+        check = reasons['product_integrity'][0]
+        self.assertEqual((check['changed_rgb_px'], check['changed_edges_px']), (0, 0))
+        self.assertEqual(reasons['items'][0]['source'], '测试包装')
+        feature, *other = [placement['rect'] for placement in ingredients['placements']]
+        self.assertEqual(len(other), 6)
+        self.assertAlmostEqual((feature[0]+feature[2])/2, 300, delta=1)
+        self.assertTrue(all(feature[2]-feature[0] > box[2]-box[0] for box in other))
+        with Image.open(result['pages'][2]) as rendered:
+            center = ((feature[0]+feature[2])//2, (feature[1]+feature[3])//2)
+            self.assertEqual(rendered.getpixel(center), (100, 112, 65))
+            self.assertNotEqual(rendered.getpixel((feature[0], feature[1])), (100, 112, 65))
+
+    def test_text_only_reasons_and_ingredients_require_no_product_photo(self):
+        pages = [
+            {'kind': 'reasons', 'items': [{'label': '旋盖开合', 'text': '用后可拧回管盖'}]},
+            {'kind': 'ingredients', 'layout': 'grid', 'items': [{'label': '原料名称'}]},
+        ]
+        run = self.run_series(pages, include_product=False)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        report = json.loads(Path(json.loads(run.stdout)['report']).read_text())
+        self.assertTrue(all(not page['placements'] for page in report['pages']))
+        pages[1]['featured'] = True
+        run = self.run_series(pages, include_product=False)
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('对应材料图', run.stderr)
+
     def test_detail_series_requires_document_images_and_removes_failed_run(self):
         no_image = self.run_series([{'kind': 'documents', 'items': [{'label': '资质'}]}])
         self.assertNotEqual(no_image.returncode, 0)

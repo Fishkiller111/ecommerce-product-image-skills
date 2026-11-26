@@ -8,21 +8,23 @@ import tempfile
 from pathlib import Path
 
 from render_detail import PALETTES, SWAP, cutout, detail_review, digest, fitted, load_font, valid_text
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageOps
 from detail_product_guard import check_product_layers
 from detail_scene_layout import draw_scene_copy, read_scene_layout, relight_product
 
 PANEL_TITLES = {
     'hero': '商品展示',
+    'reasons': '选择它的理由',
     'ingredients': '成分展示',
     'usage': '使用方法',
     'specs': '产品参数',
     'gallery': '产品实拍',
     'documents': '资质展示',
 }
-MAX_ITEMS = {'hero': 2, 'ingredients': 6, 'usage': 4, 'specs': 7, 'gallery': 3, 'documents': 4}
+MAX_ITEMS = {'hero': 2, 'reasons': 4, 'ingredients': 6, 'usage': 4, 'specs': 7, 'gallery': 3, 'documents': 4}
 DEFAULT_HEIGHT = {'hero': 1.68, 'ingredients': 1.68, 'usage': 1.48, 'documents': 1.64}
 SECTION_LAYOUTS = {'ingredients': 'grid', 'gallery': 'alternating', 'specs': 'table'}
+SCENIC_KINDS = ('hero', 'reasons', 'usage')
 SONGTI = Path('/System/Library/Fonts/Supplemental/Songti.ttc')
 
 
@@ -76,16 +78,21 @@ def read_manifest(path):
         raise ValueError('pages 须包含 1–12 张图')
     pages = []
     for page in raw:
-        fields(page, 'kind title subtitle background items product_layers scene_layout layout', '页面')
+        fields(page, 'kind title subtitle background items product_layers scene_layout layout featured', '页面')
         kind = page.get('kind')
         if not isinstance(kind, str) or kind not in PANEL_TITLES:
             raise ValueError('页面 kind 无效')
         section_layout = page.get('layout')
         if 'layout' in page and (kind not in SECTION_LAYOUTS or section_layout != SECTION_LAYOUTS[kind]):
             raise ValueError('layout 仅支持 ingredients 的 grid、gallery 的 alternating 或 specs 的 table')
-        uses_scene_layout = 'scene_layout' in page
+        featured = page.get('featured', False)
+        if 'featured' in page and (section_layout != 'grid' or type(featured) is not bool):
+            raise ValueError('featured 仅用于 ingredients 的 grid，须为布尔值')
+        uses_scene_layout = 'scene_layout' in page or (kind == 'reasons' and 'background' in page)
         items = page.get('items', [])
-        max_items = 4 if uses_scene_layout and kind == 'hero' else MAX_ITEMS[kind]
+        max_items = MAX_ITEMS[kind] + featured
+        if uses_scene_layout and kind == 'hero':
+            max_items = 4
         if not isinstance(items, list) or len(items) > max_items:
             raise ValueError(f'{kind} 每屏最多 {max_items} 项，内容超出时拆屏')
         if not items and kind != 'hero':
@@ -95,19 +102,21 @@ def read_manifest(path):
             raise ValueError('背景须使用独立的空场景')
         if bg and kind in ('specs', 'gallery'):
             raise ValueError(f'{kind} 使用清晰浅底，请省略 background')
-        if uses_scene_layout and (not bg or kind not in ('hero', 'usage')):
-            raise ValueError('scene_layout 用于有独立背景的 hero 或 usage')
+        if uses_scene_layout and (not bg or kind not in SCENIC_KINDS):
+            raise ValueError('scene_layout 用于有独立背景的 hero、reasons 或 usage')
         layers = []
         if 'product_layers' in page:
-            if not bg or not (kind == 'hero' or (kind == 'usage' and uses_scene_layout)):
-                raise ValueError('product_layers 用于场景首屏或场景说明屏')
+            if not bg or not (kind == 'hero' or uses_scene_layout):
+                raise ValueError('product_layers 用于场景首屏、选择理由或场景说明屏')
             layers = placement_layers(page['product_layers'], path.parent, bg, .08 if uses_scene_layout else .15)
-        if (kind == 'hero' or (kind == 'ingredients' and not section_layout)) and not (product or layers):
+        needs_product = (kind == 'hero' or (kind == 'ingredients' and not section_layout)
+                         or (kind == 'reasons' and uses_scene_layout))
+        if needs_product and not (product or layers):
             raise ValueError(f'{kind} 需要真实商品原图或透明商品')
         normalized = []
         for item in items:
             fields(item, 'label text image source', f'{kind} 项目')
-            label = valid_text(item.get('label', ''), 'label', kind in ('usage', 'gallery'))
+            label = valid_text(item.get('label', ''), 'label', kind in ('reasons', 'usage', 'gallery'))
             body = valid_text(item.get('text', ''), 'text', kind != 'specs')
             image = asset_path(item['image'], path.parent, 'image') if 'image' in item else None
             origin = valid_text(item.get('source', ''), 'source', True)
@@ -115,23 +124,28 @@ def read_manifest(path):
                 raise ValueError(f'{kind} 每项都须提供实际图片')
             if section_layout == 'alternating' and not (label or body):
                 raise ValueError('alternating 的每张实拍需要对应的 label 或 text')
-            if kind in ('hero', 'specs') and image:
+            if kind in ('hero', 'reasons', 'specs') and image:
                 raise ValueError(f'{kind} 的条目使用文字，商品从 product 输入')
+            if kind == 'reasons' and not (label or body):
+                raise ValueError('reasons 每条需要实际理由')
             if kind == 'usage' and not (label or body or image):
                 raise ValueError('usage 至少有说明或实际使用照片')
             if kind == 'usage' and sum(bool(x['image']) for x in normalized) + bool(image) > 1:
                 raise ValueError('usage 每屏使用一张实拍，多张实拍请拆屏')
             normalized.append({'label': label, 'text': body, 'image': image, 'source': origin})
+        if featured and not normalized[0]['image']:
+            raise ValueError('featured 的第一项需要可核对的对应材料图')
         if bg and kind == 'usage' and (not (product or layers) or any(item['image'] for item in normalized)):
             raise ValueError('usage 的独立背景仅用于无使用实拍的商品场景')
         subtitle = valid_text(page.get('subtitle', ''), 'subtitle', True)
         if uses_scene_layout:
-            layout = read_scene_layout(page['scene_layout'], kind, normalized, subtitle)
+            layout = read_scene_layout(page.get('scene_layout', {}), kind, normalized, subtitle)
         pages.append({
             'kind': kind, 'title': valid_text(page.get('title', PANEL_TITLES[kind]), 'title'),
             'subtitle': subtitle,
             'background': bg, 'items': normalized, 'product_layers': layers,
             **({'layout': section_layout} if section_layout else {}),
+            **({'featured': True} if featured else {}),
             **({'scene_layout': layout} if uses_scene_layout else {}),
         })
     return width, palette, product, pages
@@ -261,8 +275,11 @@ class Panel:
                 position = layout['copy_position']
                 x, width, max_height = {'above': (.5,.86,.25), 'left': (.72,.42,.47),
                                         'right': (.28,.42,.47)}[position]
+                if page['kind'] == 'reasons' and position != 'above':
+                    x, width = (.75 if position == 'left' else .25), .40
                 height = min(max_height, width*self.w*product.height/(self.h*product.width))
-                instructions = [{'anchor':[x,.79],'height':height,'angle':0}]
+                ground = .86 if page['kind'] == 'reasons' else .79
+                instructions = [{'anchor':[x,ground],'height':height,'angle':0}]
             else:
                 instructions = [{'anchor':[.55,.855],'height':.55,'angle':0}]
         prepared = []
@@ -358,23 +375,40 @@ class Panel:
     def section_rule(self, y):
         self.draw.line(self.rect((.087,y,.913,y)), fill=self.shade, width=max(1,self.w//600))
 
-    def ingredients_grid(self, items, top, row_heights):
-        columns = min(3, len(items))
-        cell_width = .826/columns
+    def ingredients_grid(self, groups, top, row_heights, featured):
         y = top
-        for row, height in enumerate(row_heights):
-            row_height = height*self.w/self.h
-            group = items[row*columns:(row+1)*columns]
+        columns = max(len(group) for group in groups)
+        unit = self.w/self.h
+        for row, (group, height) in enumerate(zip(groups, row_heights)):
+            row_height = height*unit
+            primary = featured and row == 0
+            cell_width = .52 if primary else .826/columns
+            image_share = min(.37 if primary else .235, cell_width-.04)
             for column, item in enumerate(group):
                 left = .5 - len(group)*cell_width/2 + column*cell_width
                 right = left+cell_width
                 label, body, path = item['label'], item['text'], item['image']
                 if path:
-                    self.place(open_asset(path), (left+.015,y,right-.015,y+.60*row_height), 'ingredient')
-                label_top = y+(.63 if path else .16)*row_height
-                label_bottom = y+(.80 if path else .55)*row_height if body else y+.92*row_height
-                self.text(label, (left+.015,label_top,right-.015,label_bottom), .037, .024, title=True)
-                self.text(body, (left+.015,label_bottom,right-.015,y+.97*row_height), .027, .022, 2)
+                    image = open_asset(path)
+                    diameter = round(self.w*image_share)
+                    tile = ImageOps.fit(image, (diameter, diameter), method=Image.Resampling.LANCZOS)
+                    mask = Image.new('L', (2*diameter, 2*diameter))
+                    ImageDraw.Draw(mask).ellipse((0,0,mask.width-1,mask.height-1), fill=255)
+                    tile.putalpha(ImageChops.multiply(tile.getchannel('A'), mask.resize(tile.size, Image.Resampling.LANCZOS)))
+                    cx = round((left+right)*self.w/2)
+                    py = round(y*self.h+.018*self.w)
+                    self.draw.ellipse((cx-diameter//2-2,py-2,cx-diameter//2+diameter+1,py+diameter+1),
+                                      fill=self.paper)
+                    self.add_asset(tile, (cx-diameter//2,py), 'ingredient', image.size, tile.size)
+                label_top = y+(.036+image_share)*unit if path else y+.19*row_height
+                label_bottom = label_top+(.069 if primary else .062)*unit
+                inset = .07 if primary else .016
+                bounds = (left+inset, label_top, right-inset, label_bottom)
+                if path or not body:
+                    x0,y0,x1,y1 = self.rect(bounds)
+                    self.draw.rounded_rectangle((x0,y0,x1,y1), radius=(y1-y0)//2, fill=self.shade)
+                self.text(label, bounds, .040 if primary else .036, .020, title=True)
+                self.text(body, (left+.02,label_bottom,right-.02,y+.98*row_height), .026, .019, 2)
             y += row_height
 
     def alternating_photos(self, items, top, photos, row_heights):
@@ -416,8 +450,12 @@ def section_heading_height(page):
 def render_section(width, palette, page):
     layout, items = page['layout'], page['items']
     if layout == 'grid':
-        row_heights = [.46 if any(i['image'] for i in items[start:start+3]) else .21
-                       for start in range(0, len(items), 3)]
+        featured = page.get('featured', False)
+        groups = [items[:1]] if featured else []
+        groups += [items[start:start+3] for start in range(int(featured), len(items), 3)]
+        row_heights = [.405 if any(item['image'] for item in group) else .18 for group in groups]
+        if featured:
+            row_heights[0] = .565
     elif layout == 'alternating':
         photos = [open_asset(item['image']) for item in items]
         row_heights = [max(.25, min(.47, .454*p.height/p.width + .075)) for p in photos]
@@ -431,7 +469,7 @@ def render_section(width, palette, page):
         panel.draw = ImageDraw.Draw(panel.canvas)
     top = panel.section_title(page)
     if layout == 'grid':
-        panel.ingredients_grid(items, top, row_heights)
+        panel.ingredients_grid(groups, top, row_heights, featured)
     elif layout == 'alternating':
         panel.alternating_photos(items, top, photos, row_heights)
     else:
@@ -449,6 +487,8 @@ def render_panel(width, palette, page, product):
         ratio = 1.25
     elif scenic:
         ratio = 1.35
+    elif kind == 'reasons':
+        ratio = .58+.20*len(items)
     elif kind == 'gallery':
         gallery = [open_asset(item['image']) for item in items]
         portrait = all(asset.height > 1.2*asset.width for asset in gallery)
@@ -457,12 +497,14 @@ def render_panel(width, palette, page, product):
         ratio = .37+.105*len(items)
     else:
         ratio = DEFAULT_HEIGHT[kind]
-    panel = Panel((width,round(width*ratio)), palette)
-    top = panel.title(page) if not scenic else None
+    panel = Panel((width,round(width*ratio)), palette, framed=kind != 'reasons')
+    top = panel.title(page) if not scenic and kind != 'reasons' else None
     bg = page['background']
 
     if scenic:
         panel.scenic_hero(page,product)
+    elif kind == 'reasons':
+        draw_scene_copy(panel, page)
     elif kind == 'hero':
         floor = .845 if items else .938
         panel.scene((.060,top,.940,floor),bg)
