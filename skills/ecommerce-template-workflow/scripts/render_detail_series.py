@@ -22,6 +22,7 @@ PANEL_TITLES = {
 }
 MAX_ITEMS = {'hero': 2, 'ingredients': 6, 'usage': 4, 'specs': 7, 'gallery': 3, 'documents': 4}
 DEFAULT_HEIGHT = {'hero': 1.68, 'ingredients': 1.68, 'usage': 1.48, 'documents': 1.64}
+SECTION_LAYOUTS = {'ingredients': 'grid', 'gallery': 'alternating', 'specs': 'table'}
 SONGTI = Path('/System/Library/Fonts/Supplemental/Songti.ttc')
 
 
@@ -75,10 +76,13 @@ def read_manifest(path):
         raise ValueError('pages 须包含 1–12 张图')
     pages = []
     for page in raw:
-        fields(page, 'kind title subtitle background items product_layers scene_layout', '页面')
+        fields(page, 'kind title subtitle background items product_layers scene_layout layout', '页面')
         kind = page.get('kind')
         if not isinstance(kind, str) or kind not in PANEL_TITLES:
             raise ValueError('页面 kind 无效')
+        section_layout = page.get('layout')
+        if 'layout' in page and (kind not in SECTION_LAYOUTS or section_layout != SECTION_LAYOUTS[kind]):
+            raise ValueError('layout 仅支持 ingredients 的 grid、gallery 的 alternating 或 specs 的 table')
         uses_scene_layout = 'scene_layout' in page
         items = page.get('items', [])
         max_items = 4 if uses_scene_layout and kind == 'hero' else MAX_ITEMS[kind]
@@ -98,7 +102,7 @@ def read_manifest(path):
             if not bg or not (kind == 'hero' or (kind == 'usage' and uses_scene_layout)):
                 raise ValueError('product_layers 用于场景首屏或场景说明屏')
             layers = placement_layers(page['product_layers'], path.parent, bg, .08 if uses_scene_layout else .15)
-        if kind in ('hero', 'ingredients') and not (product or layers):
+        if (kind == 'hero' or (kind == 'ingredients' and not section_layout)) and not (product or layers):
             raise ValueError(f'{kind} 需要真实商品原图或透明商品')
         normalized = []
         for item in items:
@@ -109,6 +113,8 @@ def read_manifest(path):
             origin = valid_text(item.get('source', ''), 'source', True)
             if kind in ('gallery', 'documents') and not image:
                 raise ValueError(f'{kind} 每项都须提供实际图片')
+            if section_layout == 'alternating' and not (label or body):
+                raise ValueError('alternating 的每张实拍需要对应的 label 或 text')
             if kind in ('hero', 'specs') and image:
                 raise ValueError(f'{kind} 的条目使用文字，商品从 product 输入')
             if kind == 'usage' and not (label or body or image):
@@ -125,6 +131,7 @@ def read_manifest(path):
             'kind': kind, 'title': valid_text(page.get('title', PANEL_TITLES[kind]), 'title'),
             'subtitle': subtitle,
             'background': bg, 'items': normalized, 'product_layers': layers,
+            **({'layout': section_layout} if section_layout else {}),
             **({'scene_layout': layout} if uses_scene_layout else {}),
         })
     return width, palette, product, pages
@@ -157,7 +164,7 @@ def gradient(size, top, bottom):
 
 
 class Panel:
-    def __init__(self, size, palette):
+    def __init__(self, size, palette, framed=True):
         self.w, self.h = size
         self.palette = palette
         if palette == 'heritage':
@@ -170,7 +177,8 @@ class Panel:
         self.draw = ImageDraw.Draw(self.canvas)
         self.placements = []
         self.layers = []
-        self.frame((.025, .016, .975, .984), None, double=True)
+        if framed:
+            self.frame((.025, .016, .975, .984), None, double=True)
 
     def rect(self, box):
         return tuple(round(n*f) for n, f in zip((self.w, self.h, self.w, self.h), box))
@@ -340,8 +348,100 @@ class Panel:
         if body:
             self.text(body,(x+.021,split if label else text_top,r-.021,b-.009),.027,.019,2)
 
+    def section_title(self, page):
+        unit = self.w/self.h
+        self.text(page['title'], (.087,.040*unit,.913,.130*unit), .068, .040,
+                  center=False, title=True)
+        self.text(page['subtitle'], (.087,.137*unit,.913,.195*unit), .033, .025, center=False)
+        return section_heading_height(page)*unit
+
+    def section_rule(self, y):
+        self.draw.line(self.rect((.087,y,.913,y)), fill=self.shade, width=max(1,self.w//600))
+
+    def ingredients_grid(self, items, top, row_heights):
+        columns = min(3, len(items))
+        cell_width = .826/columns
+        y = top
+        for row, height in enumerate(row_heights):
+            row_height = height*self.w/self.h
+            group = items[row*columns:(row+1)*columns]
+            for column, item in enumerate(group):
+                left = .5 - len(group)*cell_width/2 + column*cell_width
+                right = left+cell_width
+                label, body, path = item['label'], item['text'], item['image']
+                if path:
+                    self.place(open_asset(path), (left+.015,y,right-.015,y+.60*row_height), 'ingredient')
+                label_top = y+(.63 if path else .16)*row_height
+                label_bottom = y+(.80 if path else .55)*row_height if body else y+.92*row_height
+                self.text(label, (left+.015,label_top,right-.015,label_bottom), .037, .024, title=True)
+                self.text(body, (left+.015,label_bottom,right-.015,y+.97*row_height), .027, .022, 2)
+            y += row_height
+
+    def alternating_photos(self, items, top, photos, row_heights):
+        y = top
+        for index, (item, asset, height) in enumerate(zip(items, photos, row_heights)):
+            row_height = height*self.w/self.h
+            bottom = y+row_height
+            photo, copy = ((.087,.541), (.581,.913)) if index % 2 == 0 else ((.459,.913), (.087,.419))
+            self.place(asset, (photo[0],y+.05*row_height,photo[1],bottom-.07*row_height),
+                       'gallery-photo')
+            label, body = item['label'], item['text']
+            if label and body:
+                self.text(label, (copy[0],y+.22*row_height,copy[1],y+.47*row_height),
+                          .045, .029, center=False, title=True)
+                self.text(body, (copy[0],y+.49*row_height,copy[1],bottom-.11*row_height),
+                          .035, .025, 3, center=False)
+            else:
+                self.text(label or body, (copy[0],y+.11*row_height,copy[1],bottom-.11*row_height),
+                          .040, .025, 3, center=False, title=bool(label))
+            if index+1 < len(items):
+                self.section_rule(bottom)
+            y = bottom
+
+    def specs_table(self, items, top):
+        row_height = .13*self.w/self.h
+        self.section_rule(top)
+        for index, item in enumerate(items):
+            y, bottom = top+index*row_height, top+(index+1)*row_height
+            padding = .09*row_height
+            self.text(item['label'], (.092,y+padding,.320,bottom-padding), .036, .027, 2, center=False)
+            self.text(item['text'], (.347,y+padding,.908,bottom-padding), .038, .027, 3, center=False)
+            self.section_rule(bottom)
+
+
+def section_heading_height(page):
+    return .22 if page['subtitle'] else .16
+
+
+def render_section(width, palette, page):
+    layout, items = page['layout'], page['items']
+    if layout == 'grid':
+        row_heights = [.46 if any(i['image'] for i in items[start:start+3]) else .21
+                       for start in range(0, len(items), 3)]
+    elif layout == 'alternating':
+        photos = [open_asset(item['image']) for item in items]
+        row_heights = [max(.25, min(.47, .454*p.height/p.width + .075)) for p in photos]
+    else:
+        row_heights = [.13]*len(items)
+    ratio = section_heading_height(page) + sum(row_heights) + .055
+    panel = Panel((width, round(width*ratio)), palette, framed=False)
+    if page['background']:
+        backdrop = ImageOps.fit(open_asset(page['background']), panel.canvas.size, method=Image.Resampling.LANCZOS)
+        panel.canvas = Image.blend(backdrop, panel.canvas, .79)
+        panel.draw = ImageDraw.Draw(panel.canvas)
+    top = panel.section_title(page)
+    if layout == 'grid':
+        panel.ingredients_grid(items, top, row_heights)
+    elif layout == 'alternating':
+        panel.alternating_photos(items, top, photos, row_heights)
+    else:
+        panel.specs_table(items, top)
+    return panel.canvas.convert('RGB'), panel.placements, [], None
+
 
 def render_panel(width, palette, page, product):
+    if 'layout' in page:
+        return render_section(width, palette, page)
     kind = page['kind']
     items = page['items']
     scenic = (kind == 'hero' and page['background'] is not None) or 'scene_layout' in page

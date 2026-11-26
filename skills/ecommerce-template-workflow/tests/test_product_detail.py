@@ -105,11 +105,12 @@ class ProductDetailTest(unittest.TestCase):
         self.assertNotEqual(r.returncode,0); self.assertIn('指纹不匹配',r.stderr)
         self.assertFalse(self.out.exists())
 
-    def run_series(self, pages, *args):
+    def run_series(self, pages, *args, include_product=True):
         manifest = self.root / 'plan.json'
-        manifest.write_text(json.dumps({
-            'product': self.src.name, 'width': 600, 'pages': pages,
-        }, ensure_ascii=False), encoding='utf-8')
+        plan = {'width': 600, 'pages': pages}
+        if include_product:
+            plan['product'] = self.src.name
+        manifest.write_text(json.dumps(plan, ensure_ascii=False), encoding='utf-8')
         return subprocess.run(
             [sys.executable, str(SERIES), str(manifest), '--out', str(self.out), *args],
             capture_output=True, text=True,
@@ -155,6 +156,46 @@ class ProductDetailTest(unittest.TestCase):
                     self.assertEqual(page.tobytes(), joined.crop((0, offset, 600, offset+page.height)).tobytes())
                     offset += page.height
             self.assertEqual(joined.height, offset)
+
+    def test_standard_sections_render_without_repeating_the_product_photo(self):
+        photo = self.root/'close-up.jpg'
+        Image.new('RGB', (850, 580), (153, 116, 83)).save(photo)
+        pages = [
+            {'kind': 'ingredients', 'layout': 'grid', 'items': [
+                {'label': '原料一', 'image': photo.name, 'source': '配料资料'},
+                {'label': '原料二', 'text': '只提供配料名称'},
+            ]},
+            {'kind': 'gallery', 'layout': 'alternating', 'items': [
+                {'label': '包装正面', 'text': '原图印字', 'image': photo.name},
+                {'text': '侧面标识', 'image': self.src.name},
+            ]},
+            {'kind': 'specs', 'layout': 'table', 'items': [
+                {'label': '规格', 'text': '18g/支', 'source': '包装侧面'},
+                {'label': '贮藏', 'text': '密闭，置通风干燥处保存'},
+            ]},
+        ]
+        run = self.run_series(pages, '--long', include_product=False)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        result = json.loads(run.stdout)
+        report = json.loads(Path(result['report']).read_text())
+        grid, gallery, specs = report['pages']
+        self.assertIsNone(report['product'])
+        self.assertEqual([p['role'] for p in grid['placements']], ['ingredient'])
+        left, right = [p['rect'] for p in gallery['placements']]
+        self.assertLess((left[0]+left[2])/2, 300)
+        self.assertGreater((right[0]+right[2])/2, 300)
+        self.assertLess(left[3], right[1])
+        self.assertEqual(specs['items'][0]['text'], '18g/支')
+        self.assertEqual(specs['items'][0]['source'], '包装侧面')
+        with Image.open(result['long_image']) as joined:
+            self.assertEqual(joined.size, (600, sum(p['size'][1] for p in report['pages'])))
+
+    def test_alternating_gallery_requires_copy_for_each_photo(self):
+        run = self.run_series([{'kind': 'gallery', 'layout': 'alternating', 'items': [
+            {'image': self.src.name},
+        ]}], include_product=False)
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('label 或 text', run.stderr)
 
     def test_detail_series_requires_document_images_and_removes_failed_run(self):
         no_image = self.run_series([{'kind': 'documents', 'items': [{'label': '资质'}]}])
