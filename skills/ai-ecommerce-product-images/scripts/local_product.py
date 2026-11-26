@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from unittest.mock import patch
 
 import numpy as np
 from PIL import Image, ImageCms, ImageEnhance, ImageFilter, ImageOps
@@ -41,6 +42,52 @@ def source_rgba(path):
             raise ValueError('无法将原图 ICC 转换为 sRGB，请先导出为有正常色彩配置的 sRGB 图像') from exc
         srgb.putalpha(image.getchannel('A'))
         return srgb, 'ICC-to-sRGB'
+
+
+def rembg_model_path(model):
+    data_home = os.environ.get('XDG_DATA_HOME')
+    root = Path(data_home).expanduser() if data_home else Path.home()
+    model_home = os.environ.get('U2NET_HOME')
+    legacy_cache = Path(model_home or root/'.u2net').expanduser()
+    default_cache = root/('rembg' if data_home else '.rembg')
+    cache = Path(model_home or os.environ.get('REMBG_HOME') or default_cache).expanduser()
+    # rembg 2.0.87 uses per-model folders and reads older flat caches as a fallback.
+    # Mirror this lookup without invoking the potentially downloading session helper.
+    models = ('u2netp', 'u2net') if model is None and sys.platform == 'win32' else (model or 'u2net',)
+    for name in models:
+        filename = f'{name}.onnx'
+        for candidate in (cache/'models'/name/filename, legacy_cache/filename):
+            if candidate.is_file():
+                return name, candidate
+    first = models[0]
+    return first, cache/'models'/first/f'{first}.onnx'
+
+
+def rembg_mask(image, model):
+    model, model_file = rembg_model_path(model)
+    if not model_file.is_file():
+        raise RuntimeError(
+            f'缺少本地模型 {model_file}。请先按技能说明准备权重，或使用 --mask / --backend grabcut。'
+        )
+    try:
+        from rembg import new_session, remove
+        if model == 'u2net':
+            from rembg.sessions.u2net import U2netSession as session_type
+        else:
+            from rembg.sessions.u2netp import U2netpSession as session_type
+    except (ImportError, OSError, SystemExit) as exc:
+        hint = 'Windows 请安装本技能的 requirements-windows.txt 并检查 x64 Visual C++ 运行库。' if sys.platform == 'win32' else ''
+        raise RuntimeError(f'无法加载 rembg 的 CPU 依赖。{hint} {exc}') from exc
+    try:
+        # Inference uses the prepared weights even when the network is unavailable.
+        with patch.object(session_type, 'download_models', return_value=str(model_file.resolve())):
+            session = new_session(model, providers=['CPUExecutionProvider'])
+        mask = remove(image.convert('RGB'), session=session, only_mask=True)
+    except Exception as exc:
+        raise RuntimeError(f'本地 CPU 抠图失败。请检查模型 {model_file}，或使用 --mask。{exc}') from exc
+    if not isinstance(mask, Image.Image) or mask.size != image.size:
+        raise ValueError('本地 CPU 蒙版尺寸或格式不匹配')
+    return mask.convert('L'), f'rembg-{model}'
 
 
 def local_mask(source, im, backend, model, rect, supplied, tmp):
@@ -74,20 +121,7 @@ def local_mask(source, im, backend, model, rect, supplied, tmp):
             if m.size != size: raise ValueError('Vision 蒙版尺寸不匹配')
             return m.convert('RGBA').getchannel('A'), 'macOS Vision'
     if backend == 'rembg':
-        model_file = Path(os.environ.get('U2NET_HOME', str(Path.home()/'.u2net')))/f'{model}.onnx'
-        if not model_file.is_file():
-            raise RuntimeError(f'本机未安装模型权重 {model_file}；请先配置本地权重或选其他后端')
-        from rembg import new_session, remove
-        from unittest.mock import patch
-        if model == 'u2net':
-            from rembg.sessions.u2net import U2netSession as session_type
-        else:
-            from rembg.sessions.u2netp import U2netpSession as session_type
-        # Do not let rembg's model helper download even if a local file is corrupt.
-        with patch.object(session_type, 'download_models', return_value=str(model_file)):
-            session=new_session(model, providers=['CPUExecutionProvider'])
-        result = remove(im.convert('RGB'), session=session, only_mask=True)
-        return result.convert('L'), f'rembg-{model}'
+        return rembg_mask(im, model)
     if backend == 'grabcut':
         if not rect: raise ValueError('GrabCut 需要 --rect x y width height，使用原图像素坐标')
         try: import cv2
@@ -247,7 +281,8 @@ def main():
     p=argparse.ArgumentParser(description='在本机抠图、可控修边和非生成式提亮调色。')
     p.add_argument('source',type=Path); p.add_argument('--out',type=Path,required=True)
     p.add_argument('--backend',choices=['auto','alpha','vision','rembg','grabcut'],default='auto')
-    p.add_argument('--model',choices=['u2net','u2netp'],default='u2net')
+    p.add_argument('--model', choices=['u2net', 'u2netp'],
+                   help='本地 CPU 权重。Windows 优先 u2netp，可复用已缓存的 u2net')
     p.add_argument('--mask',type=Path,help='人工修正的同尺寸灰度或 RGBA 蒙版 PNG')
     p.add_argument('--finish-recipe',type=Path,help='指定原图专用精修 JSON；默认按原图 SHA-256 查找内置配方')
     p.add_argument('--rect',type=int,nargs=4,metavar=('X','Y','WIDTH','HEIGHT'))
@@ -287,8 +322,11 @@ def main():
     if outline is not None:
         mask,mode=outline_mask(im.size,outline),'source-traced-outline'
     else:
-        with tempfile.TemporaryDirectory(prefix='local-product-') as d:
-            mask,mode=local_mask(source,im,a.backend,a.model,a.rect,a.mask,Path(d))
+        try:
+            with tempfile.TemporaryDirectory(prefix='local-product-') as d:
+                mask,mode=local_mask(source,im,a.backend,a.model,a.rect,a.mask,Path(d))
+        except (RuntimeError, ValueError) as exc:
+            p.error(str(exc))
     opaque_edge = a.edge_mode == 'opaque' or (a.edge_mode == 'auto' and mode.startswith('OpenCV GrabCut'))
     if a.matte_blackpoint or a.matte_whitepoint != 255:
         low, high=a.matte_blackpoint,a.matte_whitepoint
@@ -352,6 +390,6 @@ def main():
     if recipe_path:
         report.update(finish_recipe=str(recipe_path.resolve()),decontaminate_px=fringe)
     (out/'review.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
-    print(json.dumps({'transparent':str(out/'transparent.png'),'white':str(out/'white.png'),'native':str(out/'native_enhanced_rgba.png'),'mask':str(out/'mask.png'),'review':'待人工复核','method':mode,'tone':tone},ensure_ascii=False))
+    print(json.dumps({'transparent':str(out/'transparent.png'),'white':str(out/'white.png'),'native':str(out/'native_enhanced_rgba.png'),'mask':str(out/'mask.png'),'review':'待人工复核','method':mode,'tone':tone},ensure_ascii=sys.platform == 'win32'))
 
 if __name__=='__main__': main()

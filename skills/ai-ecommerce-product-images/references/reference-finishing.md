@@ -2,7 +2,7 @@
 
 ## 选择底稿
 
-- 默认复用有透明背景的源图 alpha，或生成 macOS Vision、本地 rembg 蒙版。接近不透明的 RGBA 白底图仍需分割。自动蒙版没识别到商品时可换 `--backend vision`、`--backend rembg --model u2net` 或 `u2netp`，也可以直接描边。rembg 使用已安装的本地权重。
+- 默认复用有透明背景的源图 alpha，或生成 macOS Vision、本地 rembg 蒙版。接近不透明的 RGBA 白底图仍需分割。自动蒙版没识别到商品时可换本机支持的后端，也可以直接描边。rembg 使用已准备的本地权重。Windows 安装及复跑见 [PowerShell 操作](windows.md)。
 - 色差明显、背景简单时可比较 `--backend grabcut --rect X Y WIDTH HEIGHT`。矩形用校正 EXIF 方向后的原图像素，须包住完整商品并留一点背景。检查桌面是否一起被选。
 - 工作中使用原始像素和原图方向。默认居中等比、主体最长边约占方图的 86%，放大最多 2 倍。可用 `--size`、`--fill`、`--upscale-limit 1` 调整。亮度与色彩校正默认开启，`--strength` 默认 1，可按实际观感在 0 至 1.5 内调整。仅在用户要求保留曝光和原色时使用 0。锐化用 `--sharpness` 单独控制。
 - `review.json` 记录 `color_space`、`tone` 和 `edge`。默认曝光根据主体各像素最高通道的第 90 和第 98 百分位估计高光余量，限制高光提亮并保护深色印刷。检查报告中的亮度、色度中位数和曝光增益，再对照原照与成图。带 ICC 的照片先转换到 sRGB，取样图也在 sRGB 中读取数值。

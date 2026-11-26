@@ -7,6 +7,8 @@ description: 在本机将真实商品抠成配套纯白底图和透明 PNG。按
 
 从原照保留商品的角度、结构、印字和纹理。用本地非生成式处理完成调色、轮廓精修和导出。用户给出的成品案例用于判定色调、质感和边缘。同款参考可用于对应材质的精准取样。
 
+Windows x64 使用 Python 3.12 和本技能自带的依赖清单。首次安装、CPU 模型准备及中文路径命令见 [Windows PowerShell 操作](references/windows.md)。
+
 1. **生成底稿。** 用 `scripts/local_product.py` 生成初版。源图已有真实透明背景时复用 alpha。自动蒙版由 Vision 或本地 rembg 提供，也可用 GrabCut 或 `--mask`。脚本按原图 SHA-256 载入已启用的精修配方。见[运行与复跑说明](references/reference-finishing.md#选择底稿)。
 
    ```text

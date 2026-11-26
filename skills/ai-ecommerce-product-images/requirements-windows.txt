@@ -1,0 +1,6 @@
+# Windows x64, Python 3.12. The standalone local cutout and finishing workflow.
+Pillow>=12.3,<14
+numpy>=2.3,<3
+scipy>=1.16.3,<2
+opencv-python-headless>=4.12,<5
+rembg[cpu]==2.0.87

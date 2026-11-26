@@ -1,22 +1,28 @@
 import hashlib
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 from PIL import Image, ImageDraw
 
 SCRIPT=Path(__file__).resolve().parents[1]/'scripts'/'local_product.py'
+sys.path.insert(0, str(SCRIPT.parent))
+import local_product
 
 class LocalProductTest(unittest.TestCase):
     def setUp(self):
-        self.temp=tempfile.TemporaryDirectory(); self.root=Path(self.temp.name)
+        self.temp=tempfile.TemporaryDirectory(prefix='商品图 测试 '); self.root=Path(self.temp.name)
     def tearDown(self): self.temp.cleanup()
-    def run_tool(self,*args,ok=True):
-        p=subprocess.run([sys.executable,str(SCRIPT),*map(str,args)],capture_output=True,text=True)
+    def run_tool(self,*args,ok=True,env=None):
+        p=subprocess.run([sys.executable,'-X','utf8',str(SCRIPT),*map(str,args)],
+                         capture_output=True,encoding='utf-8',env=env)
         if ok: self.assertEqual(p.returncode,0,p.stderr)
         else: self.assertNotEqual(p.returncode,0)
         return p
@@ -31,13 +37,13 @@ class LocalProductTest(unittest.TestCase):
         self.assertEqual(transparent.getpixel((0,0))[3],0); self.assertEqual(white.getpixel((0,0)),(255,255,255))
         expected=Image.new('RGB',transparent.size,'white'); expected.paste(transparent,mask=transparent.getchannel('A'))
         self.assertEqual(expected.tobytes(),white.tobytes())
-        report=json.loads((out/'review.json').read_text()); self.assertEqual(report['review_status'],'待人工复核');self.assertEqual(report['upscale_ratio'],1)
+        report=json.loads((out/'review.json').read_text(encoding='utf-8')); self.assertEqual(report['review_status'],'待人工复核');self.assertEqual(report['upscale_ratio'],1)
         self.run_tool(src,'--out',out,ok=False)
     def test_manual_matte_and_mismatched_mask(self):
         src=self.root/'source.png';Image.new('RGB',(100,80),(120,80,50)).save(src)
         mask=Image.new('L',(100,80),0); ImageDraw.Draw(mask).rectangle((25,10,75,70),fill=255); mask.save(self.root/'mask.png')
         self.run_tool(src,'--out',self.root/'good','--mask',self.root/'mask.png','--size','256')
-        tone=json.loads((self.root/'good'/'review.json').read_text())['tone']
+        tone=json.loads((self.root/'good'/'review.json').read_text(encoding='utf-8'))['tone']
         self.assertGreater(tone['median_luma_after'],tone['median_luma_before']+15)
         self.assertGreater(tone['median_chroma_after'],tone['median_chroma_before'])
         with Image.open(self.root/'good'/'white.png') as white, Image.open(self.root/'good'/'transparent.png') as transparent:
@@ -86,7 +92,7 @@ class LocalProductTest(unittest.TestCase):
         self.run_tool(source, '--out', out)
         with Image.open(out / 'mask.png') as matte:
             self.assertEqual(matte.tobytes(), original.getchannel('A').tobytes())
-        report = json.loads((out / 'review.json').read_text())
+        report = json.loads((out / 'review.json').read_text(encoding='utf-8'))
         self.assertEqual(report['tone']['measurement_region'], 'high-alpha')
 
     def test_opaque_refinement_cleans_the_antialiased_transition(self):
@@ -106,6 +112,57 @@ class LocalProductTest(unittest.TestCase):
             self.assertEqual(partial_rgb, {(35, 55, 68)})
             self.assertEqual(image.getpixel((35, 25)), (35, 55, 68, 255))
 
+    def test_windows_prefers_small_cached_model_and_keeps_explicit_choice(self):
+        cache = self.root / '权重 目录'
+        cache.mkdir()
+        small = cache / 'models' / 'u2netp' / 'u2netp.onnx'
+        large = cache / 'u2net.onnx'
+        with (patch.object(local_product, 'sys', SimpleNamespace(platform='win32')),
+              patch.dict(os.environ, {'U2NET_HOME': str(cache)})):
+            self.assertEqual(local_product.rembg_model_path(None), ('u2netp', small))
+            large.touch()
+            self.assertEqual(local_product.rembg_model_path(None), ('u2net', large))
+            small.parent.mkdir(parents=True)
+            small.touch()
+            self.assertEqual(local_product.rembg_model_path(None), ('u2netp', small))
+            self.assertEqual(local_product.rembg_model_path('u2net'), ('u2net', large))
+
+    def test_missing_weights_reports_expected_path_without_creating_output(self):
+        source = self.root / '商品 原照.png'
+        Image.new('RGB', (100, 80), 'white').save(source)
+        out = self.root / '白底 输出'
+        cache = self.root / '空 模型目录'
+        result = self.run_tool(source, '--out', out, '--backend', 'rembg', '--model', 'u2netp',
+                               ok=False, env={**os.environ, 'U2NET_HOME': str(cache)})
+        self.assertIn(str(cache / 'models' / 'u2netp' / 'u2netp.onnx'), result.stderr)
+        self.assertFalse(cache.exists())
+        self.assertFalse(out.exists())
+
+    @unittest.skipUnless(os.environ.get('PRODUCT_RUN_MODEL_TESTS') == '1', 'requires prepared u2netp weights')
+    def test_cpu_model_exports_matching_white_and_transparent_pngs(self):
+        source = self.root / '商品 原照.png'
+        out = self.root / '白底 输出'
+        original = Image.new('RGB', (512, 512), '#e9e9e9')
+        draw = ImageDraw.Draw(original)
+        draw.rounded_rectangle((75, 180, 437, 340), radius=20, fill='#f1b91e', outline='#7e391c', width=8)
+        draw.ellipse((160, 220, 330, 290), fill='#941f1f')
+        original.save(source)
+        backend = [] if sys.platform == 'win32' else ['--backend', 'rembg', '--model', 'u2netp']
+        result = self.run_tool(source, '--out', out, '--strength', 0, '--sharpness', 0, *backend)
+        self.assertEqual(Path(json.loads(result.stdout)['transparent']), out / 'transparent.png')
+        report = json.loads((out / 'review.json').read_text(encoding='utf-8'))
+        self.assertEqual(report['mask_backend'], 'rembg-u2netp')
+        with Image.open(out / 'native_enhanced_rgba.png') as native:
+            self.assertEqual(native.convert('RGB').tobytes(), original.crop(report['subject_bbox']).tobytes())
+        with Image.open(out / 'transparent.png') as transparent, Image.open(out / 'white.png') as white:
+            self.assertEqual(transparent.size, (1440, 1440))
+            alpha = transparent.getchannel('A')
+            self.assertEqual(alpha.getpixel((0, 0)), 0)
+            self.assertGreater(alpha.getpixel((720, 720)), 245)
+            expected = Image.new('RGB', transparent.size, 'white')
+            expected.paste(transparent, mask=alpha)
+            self.assertEqual(white.tobytes(), expected.tobytes())
+
     @unittest.skipUnless(importlib.util.find_spec('cv2'), 'reference palettes require OpenCV')
     def test_default_run_and_remasking_keep_the_matching_palette(self):
         install = self.root / 'skill'
@@ -123,7 +180,7 @@ class LocalProductTest(unittest.TestCase):
             'auto_apply': True,
             'outline': [[25, 10], [75, 10], [75, 70], [25, 70]],
             'palette': [{'source': [120, 80, 50], 'target': [222, 170, 80]}],
-        }))
+        }), encoding='utf-8')
         mask_path = self.root / 'updated-mask.png'
         mask = Image.new('L', (100, 80))
         ImageDraw.Draw(mask).rectangle((30, 15, 70, 65), fill=255)
@@ -137,11 +194,11 @@ class LocalProductTest(unittest.TestCase):
             with self.subTest(name=name):
                 out = self.root / name
                 result = subprocess.run(
-                    [sys.executable, str(scripts / SCRIPT.name), str(source), '--out', str(out), *args],
-                    capture_output=True, text=True,
+                    [sys.executable, '-X', 'utf8', str(scripts / SCRIPT.name), str(source), '--out', str(out), *args],
+                    capture_output=True, encoding='utf-8',
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
-                report = json.loads((out / 'review.json').read_text())
+                report = json.loads((out / 'review.json').read_text(encoding='utf-8'))
                 self.assertEqual(Path(report['finish_recipe']), recipe.resolve())
                 self.assertEqual(report['mask_backend'], backend)
                 self.assertEqual(report['tone']['method'], method)

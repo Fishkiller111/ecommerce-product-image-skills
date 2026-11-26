@@ -48,7 +48,7 @@ jobs:
             if (!(Test-Path $protocol) -or !(Test-Path (Join-Path $workflow 'scripts\composite_white.py'))) { throw "Missing workflow GPT cutout support" }
             if (-not (Select-String -Path $protocol -SimpleMatch 'v2026-11-19-gpt-cutout-1' -Quiet)) { throw "Wrong workflow GPT cutout protocol version" }
             $cutout = Join-Path $target '.agents\skills\ai-ecommerce-product-images'
-            foreach ($path in @('scripts\local_product.py', 'scripts\finish_recipe.py', 'references\reference-finishing.md', 'examples\carton-2f251bc.json')) {
+            foreach ($path in @('requirements-windows.txt', 'scripts\local_product.py', 'scripts\finish_recipe.py', 'references\reference-finishing.md', 'references\windows.md', 'examples\carton-2f251bc.json')) {
               if (!(Test-Path (Join-Path $cutout $path))) { throw "Missing local cutout file $path" }
             }
             $installed = Join-Path $target '.agents\skills\psb-template-product-swap'
@@ -70,10 +70,17 @@ jobs:
         shell: pwsh
         env:
           PYTHONUTF8: '1'
+          PRODUCT_RUN_MODEL_TESTS: '1'
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           $target = Join-Path $env:RUNNER_TEMP '技能 安装 test'
-          $localTests = Join-Path $target '.agents\skills\ai-ecommerce-product-images\tests'
+          $cutout = Join-Path $target '.agents\skills\ai-ecommerce-product-images'
+          $env:U2NET_HOME = Join-Path $env:RUNNER_TEMP '商品 模型'
+          python -m pip install -r (Join-Path $cutout 'requirements-windows.txt')
+          if ($LASTEXITCODE -ne 0) { throw "Local cutout dependencies failed to install" }
+          python -c "from rembg import new_session; new_session('u2netp', providers=['CPUExecutionProvider'])"
+          if ($LASTEXITCODE -ne 0) { throw "Failed to prepare the local CPU model" }
+          $localTests = Join-Path $cutout 'tests'
           python -m unittest discover -s $localTests -v
           if ($LASTEXITCODE -ne 0) { throw "Installed local cutout tests failed" }
           $workflowTests = Join-Path $target '.agents\skills\ecommerce-template-workflow\tests'
