@@ -3,7 +3,41 @@
 import math
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
+
+
+def antialias_opaque_mask(mask):
+    """Smooth pixel steps only where opaque foreground meets clear background."""
+    alpha = np.asarray(mask)
+    low = np.asarray(mask.filter(ImageFilter.MinFilter(5)))
+    high = np.asarray(mask.filter(ImageFilter.MaxFilter(5)))
+    boundary = (low <= 16) & (high >= 240)
+    smoothed = np.asarray(mask.filter(ImageFilter.GaussianBlur(.85)), dtype=np.float32)
+    coverage = np.clip((smoothed-42)/171, 0, 1)
+    return Image.fromarray(np.where(boundary, np.rint(coverage*255), alpha).astype(np.uint8))
+
+
+def decontaminate_opaque_edge(image):
+    """Recover unmixed foreground RGB on a narrow, antialiased opaque contour."""
+    rgba = np.array(image)
+    alpha = rgba[:, :, 3]
+    # The native crop can end at a partially covered pixel. Treat the area
+    # outside it as transparent when finding the edge band.
+    padded = Image.fromarray(np.pad(alpha, 2))
+    near_background = np.asarray(padded.filter(ImageFilter.MinFilter(5)))[2:-2, 2:-2] <= 16
+    ys, xs = np.where((alpha > 0) & (alpha < 255) & near_background)
+    # Search a 5x5 neighborhood in distance order. Wider contamination
+    # generally indicates a misplaced contour and must be fixed in the mask.
+    offsets = [(dy, dx) for dy in range(-2, 3) for dx in range(-2, 3) if dy or dx]
+    for dy, dx in sorted(offsets, key=lambda offset: offset[0]**2+offset[1]**2):
+        if not ys.size:
+            break
+        ny = np.clip(ys+dy, 0, image.height-1)
+        nx = np.clip(xs+dx, 0, image.width-1)
+        solid = alpha[ny, nx] == 255
+        rgba[ys[solid], xs[solid], :3] = rgba[ny[solid], nx[solid], :3]
+        ys, xs = ys[~solid], xs[~solid]
+    return Image.fromarray(rgba)
 
 
 def outline_mask(size, points):

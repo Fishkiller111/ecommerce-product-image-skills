@@ -47,6 +47,65 @@ class LocalProductTest(unittest.TestCase):
         self.run_tool(src,'--out',self.root/'bad','--mask',bad,ok=False)
         self.assertFalse((self.root/'bad').exists())
 
+    def test_bright_saturated_stock_and_dark_print_keep_their_colors(self):
+        source = self.root / 'saturated.png'
+        original = Image.new('RGBA', (100, 80))
+        draw = ImageDraw.Draw(original)
+        draw.rectangle((10, 10, 89, 69), fill=(13, 19, 23, 255))
+        draw.rectangle((10, 10, 28, 69), fill=(22, 73, 234, 255))
+        original.save(source)
+        out = self.root / 'saturated'
+        self.run_tool(source, '--out', out, '--sharpness', '0')
+        with Image.open(out / 'native_enhanced_rgba.png') as image:
+            self.assertEqual(image.tobytes(), original.crop((10, 10, 90, 70)).tobytes())
+
+    def test_neutral_sample_corrects_cast_from_opaque_material(self):
+        source = self.root / 'cast.png'
+        original = Image.new('RGBA', (100, 80))
+        draw = ImageDraw.Draw(original)
+        draw.rectangle((10, 10, 89, 69), fill=(108, 111, 94, 255))
+        draw.rectangle((30, 25, 69, 54), fill=(169, 113, 40, 255))
+        original.save(source)
+        out = self.root / 'neutral'
+        self.run_tool(source, '--out', out, '--neutral-rect', 12, 12, 26, 22)
+        with Image.open(out / 'native_enhanced_rgba.png') as image:
+            neutral = image.getpixel((8, 8))[:3]
+            self.assertLessEqual(max(neutral) - min(neutral), 1)
+            self.assertEqual(image.getchannel('A').getextrema(), (255, 255))
+        self.run_tool(source, '--out', self.root / 'invalid-neutral',
+                      '--neutral-rect', 35, 29, 65, 50, ok=False)
+
+    def test_soft_source_alpha_is_preserved_even_without_opaque_pixels(self):
+        source = self.root / 'soft.png'
+        original = Image.new('RGBA', (100, 80))
+        draw = ImageDraw.Draw(original)
+        draw.ellipse((15, 10, 85, 70), fill=(108, 111, 94, 92))
+        draw.ellipse((25, 20, 75, 60), fill=(108, 111, 94, 110))
+        original.save(source)
+        out = self.root / 'soft'
+        self.run_tool(source, '--out', out)
+        with Image.open(out / 'mask.png') as matte:
+            self.assertEqual(matte.tobytes(), original.getchannel('A').tobytes())
+        report = json.loads((out / 'review.json').read_text())
+        self.assertEqual(report['tone']['measurement_region'], 'high-alpha')
+
+    def test_opaque_refinement_cleans_the_antialiased_transition(self):
+        source = self.root / 'dark-on-white.png'
+        mask_path = self.root / 'hard.png'
+        mask = Image.new('L', (100, 80))
+        ImageDraw.Draw(mask).polygon([(15, 15), (86, 25), (70, 66), (21, 60)], fill=255)
+        mask.save(mask_path)
+        original = Image.new('RGB', mask.size, 'white')
+        original.paste((35, 55, 68), (0, 0, *mask.size), mask)
+        original.save(source)
+        out = self.root / 'hard'
+        self.run_tool(source, '--out', out, '--mask', mask_path, '--edge-mode', 'opaque',
+                      '--strength', '0', '--sharpness', '0')
+        with Image.open(out / 'native_enhanced_rgba.png') as image:
+            partial_rgb = {pixel[:3] for pixel in image.getdata() if 0 < pixel[3] < 255}
+            self.assertEqual(partial_rgb, {(35, 55, 68)})
+            self.assertEqual(image.getpixel((35, 25)), (35, 55, 68, 255))
+
     @unittest.skipUnless(importlib.util.find_spec('cv2'), 'reference palettes require OpenCV')
     def test_default_run_and_remasking_keep_the_matching_palette(self):
         install = self.root / 'skill'
