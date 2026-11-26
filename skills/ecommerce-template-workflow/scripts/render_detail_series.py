@@ -10,6 +10,7 @@ from pathlib import Path
 from render_detail import PALETTES, SWAP, cutout, detail_review, digest, fitted, load_font, valid_text
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 from detail_product_guard import check_product_layers
+from detail_scene_layout import draw_scene_copy, read_scene_layout, relight_product
 
 PANEL_TITLES = {
     'hero': '商品展示',
@@ -38,7 +39,7 @@ def asset_path(value, base, name):
     return path
 
 
-def placement_layers(raw, base, background):
+def placement_layers(raw, base, background, min_height=.15):
     if not isinstance(raw,list) or not 1 <= len(raw) <= 3:
         raise ValueError('product_layers 需要 1–3 件独立的透明实拍商品')
     layers = []
@@ -49,7 +50,7 @@ def placement_layers(raw, base, background):
         if not isinstance(x_y,list) or len(x_y) != 2:
             raise ValueError('anchor 须是画布上的 [横向中心, 底端接触点]')
         values = (*x_y,height,angle)
-        bounds = ((0,1),(.45,.97),(.15,.72),(-20,20))
+        bounds = ((0,1),(.45,.97),(min_height,.72),(-20,20))
         if not all(type(value) in (int,float) and low <= value <= high
                    for value,(low,high) in zip(values,bounds)):
             raise ValueError('商品摆位超出画布、相对高度或旋转范围')
@@ -74,13 +75,15 @@ def read_manifest(path):
         raise ValueError('pages 须包含 1–12 张图')
     pages = []
     for page in raw:
-        fields(page, 'kind title subtitle background items product_layers', '页面')
+        fields(page, 'kind title subtitle background items product_layers scene_layout', '页面')
         kind = page.get('kind')
         if not isinstance(kind, str) or kind not in PANEL_TITLES:
             raise ValueError('页面 kind 无效')
+        uses_scene_layout = 'scene_layout' in page
         items = page.get('items', [])
-        if not isinstance(items, list) or len(items) > MAX_ITEMS[kind]:
-            raise ValueError(f'{kind} 每屏最多 {MAX_ITEMS[kind]} 项，内容超出时拆屏')
+        max_items = 4 if uses_scene_layout and kind == 'hero' else MAX_ITEMS[kind]
+        if not isinstance(items, list) or len(items) > max_items:
+            raise ValueError(f'{kind} 每屏最多 {max_items} 项，内容超出时拆屏')
         if not items and kind != 'hero':
             raise ValueError(f'{kind} 需要实际展示内容')
         bg = asset_path(page['background'], path.parent, 'background') if 'background' in page else None
@@ -88,11 +91,13 @@ def read_manifest(path):
             raise ValueError('背景须使用独立的空场景')
         if bg and kind in ('specs', 'gallery'):
             raise ValueError(f'{kind} 使用清晰浅底，请省略 background')
+        if uses_scene_layout and (not bg or kind not in ('hero', 'usage')):
+            raise ValueError('scene_layout 用于有独立背景的 hero 或 usage')
         layers = []
         if 'product_layers' in page:
-            if kind != 'hero' or not bg:
-                raise ValueError('product_layers 用于有独立场景背景的首屏')
-            layers = placement_layers(page['product_layers'],path.parent,bg)
+            if not bg or not (kind == 'hero' or (kind == 'usage' and uses_scene_layout)):
+                raise ValueError('product_layers 用于场景首屏或场景说明屏')
+            layers = placement_layers(page['product_layers'], path.parent, bg, .08 if uses_scene_layout else .15)
         if kind in ('hero', 'ingredients') and not (product or layers):
             raise ValueError(f'{kind} 需要真实商品原图或透明商品')
         normalized = []
@@ -111,12 +116,15 @@ def read_manifest(path):
             if kind == 'usage' and sum(bool(x['image']) for x in normalized) + bool(image) > 1:
                 raise ValueError('usage 每屏使用一张实拍，多张实拍请拆屏')
             normalized.append({'label': label, 'text': body, 'image': image, 'source': origin})
-        if bg and kind == 'usage' and (not product or any(item['image'] for item in normalized)):
+        if bg and kind == 'usage' and (not (product or layers) or any(item['image'] for item in normalized)):
             raise ValueError('usage 的独立背景仅用于无使用实拍的商品场景')
+        if uses_scene_layout:
+            layout = read_scene_layout(page['scene_layout'], kind, normalized)
         pages.append({
             'kind': kind, 'title': valid_text(page.get('title', PANEL_TITLES[kind]), 'title'),
             'subtitle': valid_text(page.get('subtitle', ''), 'subtitle', True),
             'background': bg, 'items': normalized, 'product_layers': layers,
+            **({'scene_layout': layout} if uses_scene_layout else {}),
         })
     return width, palette, product, pages
 
@@ -150,6 +158,7 @@ def gradient(size, top, bottom):
 class Panel:
     def __init__(self, size, palette):
         self.w, self.h = size
+        self.palette = palette
         if palette == 'heritage':
             self.paper, self.shade, self.ink = (252, 246, 235), (237, 220, 195), (35, 74, 64)
         else:
@@ -221,28 +230,37 @@ class Panel:
             self.canvas.alpha_composite(layer.filter(ImageFilter.GaussianBlur(max(3,round(self.w*.012)))))
         self.add_asset(asset,(left,top),role,image.size,(tw,th))
 
-    def add_asset(self, asset, origin, role, original_size, scaled_size):
+    def add_asset(self, asset, origin, role, original_size, scaled_size, ungraded=None):
         x,y = origin
         box = (x,y,x+asset.width,y+asset.height)
         if role == 'product':
             reference = Image.alpha_composite(self.canvas.crop(box),asset)
-            self.layers.append((origin,asset,reference))
+            self.layers.append((origin,asset,reference,ungraded))
         self.canvas.alpha_composite(asset,origin)
         self.placements.append({'role':role,'rect':list(box),
                                 'detail':detail_review(original_size,scaled_size,False)})
 
     def scenic_hero(self, page, product):
+        layout = page.get('scene_layout')
         self.canvas = ImageOps.fit(open_asset(page['background']),self.canvas.size,
-                                   method=Image.Resampling.LANCZOS,centering=(.34,.5))
+                                   method=Image.Resampling.LANCZOS,centering=(.5 if layout else .34,.5))
         self.draw = ImageDraw.Draw(self.canvas)
         instructions = page['product_layers']
         assets = [open_asset(line['image']) for line in instructions] if instructions else [product]
-        instructions = instructions or [{'anchor':[.55,.855],'height':.55,'angle':0}]
+        if not instructions:
+            if layout:
+                position = layout['copy_position']
+                x, width, max_height = {'above': (.5,.86,.25), 'left': (.72,.42,.47),
+                                        'right': (.28,.42,.47)}[position]
+                height = min(max_height, width*self.w*product.height/(self.h*product.width))
+                instructions = [{'anchor':[x,.79],'height':height,'angle':0}]
+            else:
+                instructions = [{'anchor':[.55,.855],'height':.55,'angle':0}]
         prepared = []
         for asset, line in zip(assets,instructions):
             if asset.getchannel('A').getextrema()[0] == 255:
                 raise ValueError('场景商品图层须为已经验边的真实透明图')
-            height = round(line['height']*self.h)
+            height = max(1, round(line['height']*self.h))
             scaled_size = (max(1,round(asset.width*height/asset.height)),height)
             layer = asset.resize(scaled_size,Image.Resampling.LANCZOS)
             if line['angle']:
@@ -258,6 +276,12 @@ class Panel:
         contact = Image.new('RGBA',self.canvas.size)
         cast_draw = ImageDraw.Draw(cast)
         contact_draw = ImageDraw.Draw(contact)
+        if layout:
+            falloff = layout['light']['falloff']
+            spread = (.10,.34) if falloff > 0 else (.34,.10) if falloff < 0 else (.22,.22)
+            contact_spread, contact_opacity = (.032, .032), 136
+        else:
+            spread, contact_spread, contact_opacity = (.8, .24), (.08, .07), 168
         for asset,(x,y),_,_ in prepared:
             alpha = asset.getchannel('A')
             threshold = min(128,alpha.getextrema()[1])
@@ -267,14 +291,24 @@ class Panel:
             left,_,right,_ = solid.crop((0,band_top,solid.width,bottom)).getbbox()
             left,right,foot = x+left,x+right,y+bottom
             span = right-left
-            cast_draw.ellipse((left-span*.8,foot-self.h*.008,right+span*.24,foot+self.h*.017),
-                              fill=(49,35,23,92))
-            contact_draw.ellipse((left-span*.08,foot-self.h*.003,right+span*.07,foot+self.h*.005),
-                                 fill=(52,38,24,168))
+            cast_draw.ellipse((left-span*spread[0],foot-self.h*.008,
+                               right+span*spread[1],foot+self.h*.017), fill=(49,35,23,92))
+            contact_draw.ellipse((left-span*contact_spread[0],foot-self.h*.003,
+                                  right+span*contact_spread[1],foot+self.h*.005),
+                                 fill=(52,38,24,contact_opacity))
         self.canvas.alpha_composite(cast.filter(ImageFilter.GaussianBlur(max(3,round(self.w*.013)))))
         self.canvas.alpha_composite(contact.filter(ImageFilter.GaussianBlur(max(1,round(self.w*.002)))))
         for asset,xy,source_size,scaled_size in prepared:
-            self.add_asset(asset,xy,'product',source_size,scaled_size)
+            ungraded = asset if layout and any(layout['light'].values()) else None
+            if ungraded is not None:
+                asset = relight_product(ungraded, xy, self.w, layout['light'])
+            self.add_asset(asset,xy,'product',source_size,scaled_size,ungraded)
+        if layout:
+            for left,top,right,bottom in draw_scene_copy(self, page):
+                for (x,y),asset,*_ in self.layers:
+                    if right > x and bottom > y and left < x+asset.width and top < y+asset.height:
+                        raise ValueError('场景文案区碰到商品，请调整 copy_position 或 product_layers')
+            return
         self.text(page['title'],(.21,.072,.96,.171),.116,.039,1,color=(57,47,30),title=True)
         self.text(page['subtitle'],(.25,.176,.92,.218),.032,color=(68,63,41))
         for i,item in enumerate(page['items']):
@@ -309,8 +343,10 @@ class Panel:
 def render_panel(width, palette, page, product):
     kind = page['kind']
     items = page['items']
-    scenic = kind == 'hero' and page['background'] is not None
-    if scenic:
+    scenic = (kind == 'hero' and page['background'] is not None) or 'scene_layout' in page
+    if 'scene_layout' in page:
+        ratio = 1.25
+    elif scenic:
         ratio = 1.35
     elif kind == 'gallery':
         gallery = [open_asset(item['image']) for item in items]

@@ -12,13 +12,12 @@ def check_product_layers(final, layers):
     guide = Image.new('L', final.size)
     later_opacity = Image.new('L', final.size)
     checks = []
-    for xy, asset, reference in reversed(layers):
+    for xy, asset, reference, *source in reversed(layers):
         x, y = xy
         box = (x, y, x+asset.width, y+asset.height)
         alpha = np.asarray(asset.getchannel('A'))
         later = np.asarray(later_opacity.crop(box)) > 0
-        # Compare against the original raster after only its declared placement transform
-        # and alpha compositing, using the scene that was immediately behind the layer.
+        # Compare against the declared placement and lighting on the original scene.
         target = np.asarray(reference.convert('RGB'))
         actual = np.asarray(final.crop(box).convert('RGB'))
         visible = (alpha > 0) & ~later
@@ -45,7 +44,23 @@ def check_product_layers(final, layers):
 
         outline = cv2.Canny(alpha,55,140) > 0
         core = cv2.erode((alpha >= 250).astype('uint8'),np.ones((5,5),np.uint8)) > 0
-        detail = edges(np.asarray(asset.convert('RGB'))) & core
+        ungraded = source[0] if source else None
+        source_rgb = np.asarray((ungraded if ungraded is not None else asset).convert('RGB'))
+        detail = edges(source_rgb) & core
+        lighting_check = {}
+        if ungraded is not None:
+            if not np.array_equal(alpha, np.asarray(ungraded.getchannel('A'))):
+                raise ValueError('场景调光改变了原图商品透明轮廓')
+            graded_rgb = np.asarray(asset.convert('RGB'))
+            graded_edges = cv2.dilate(edges(graded_rgb).astype('uint8'), np.ones((3,3),np.uint8)) > 0
+            source_edges = detail & ~later
+            max_delta = np.abs(graded_rgb.astype('int16') - source_rgb.astype('int16'))[visible].max()
+            lighting_check = {
+                'source_alpha_unchanged':True,
+                'max_source_channel_delta':int(max_delta),
+                'compared_source_print_edges_px':int(np.count_nonzero(source_edges)),
+                'unmatched_source_print_edges_px':int(np.count_nonzero(source_edges & ~graded_edges)),
+            }
         layer_guide = Image.fromarray(((outline | detail) & ~later).astype('uint8')*255)
         guide.paste(ImageChops.lighter(guide.crop(box),layer_guide),xy)
         later_opacity.paste(ImageChops.lighter(later_opacity.crop(box),asset.getchannel('A')),xy)
@@ -54,5 +69,6 @@ def check_product_layers(final, layers):
             'visible_fraction':round(visible_count/original_size,4),
             'compared_edges_px':int(np.count_nonzero(reference_edges & check_area)),
             'changed_edges_px':mismatch, 'canny_thresholds':[55,140],
+            **lighting_check,
         })
     return list(reversed(checks)), guide

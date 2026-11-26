@@ -205,4 +205,46 @@ check_product_layers(changed, [((0, 0), asset, expected)])
         self.assertNotEqual(run.returncode,0)
         self.assertIn('商品完整性核验失败',run.stderr)
 
+    def test_reference_scenes_render_copy_and_check_original_and_relit_layers(self):
+        scene = self.root/'scene.png'
+        Image.new('RGB',(600,750),(217,195,152)).save(scene)
+        original = self.src.read_bytes()
+        hero = {
+            'kind':'hero', 'title':'规格展示', 'background':scene.name,
+            'scene_layout': {
+                'copy_position':'left',
+                'highlight':{'value':'18g','label':'每支规格','source':'示例包装'},
+                'light':{'exposure':.10,'warmth':.03,'falloff':.08},
+            },
+            'items':[{'label':'使用方式','text':'示例说明'}],
+        }
+        usage = {
+            'kind':'usage', 'title':'使用说明', 'background':scene.name,
+            'scene_layout':{'copy_position':'right'},
+            'product_layers':[{'image':self.src.name,'anchor':[.27,.79],'height':.45}],
+            'items':[{'label':'示例','text':'已核对文字','source':'示例包装'}],
+        }
+        result = self.run_series([hero,usage], '--long')
+        self.assertEqual(result.returncode,0,result.stderr)
+        data = json.loads(result.stdout)
+        pages = json.loads(Path(data['report']).read_text())['pages']
+        self.assertEqual([page['size'] for page in pages], [[600,750],[600,750]])
+        self.assertEqual(pages[0]['scene_layout']['highlight']['source'], '示例包装')
+        for page in pages:
+            self.assertTrue(Path(page['canny_guide']).is_file())
+            check = page['product_integrity'][0]
+            self.assertEqual((check['changed_rgb_px'],check['changed_edges_px']), (0,0))
+        relit = pages[0]['product_integrity'][0]
+        self.assertTrue(relit['source_alpha_unchanged'])
+        self.assertGreater(relit['max_source_channel_delta'],0)
+        self.assertGreater(relit['compared_source_print_edges_px'],0)
+        self.assertEqual(self.src.read_bytes(),original)
+        with Image.open(data['long_image']) as joined:
+            self.assertEqual(joined.size,(600,1500))
+
+        usage['product_layers'][0]['anchor'] = [.70,.79]
+        overlap = self.run_series([usage])
+        self.assertNotEqual(overlap.returncode,0)
+        self.assertIn('场景文案区碰到商品',overlap.stderr)
+
 if __name__=='__main__': unittest.main()
