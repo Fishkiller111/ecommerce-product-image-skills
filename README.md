@@ -1,11 +1,14 @@
+> 更新：`ai-ecommerce-product-images` 现为纯本地提亮抠图；`apimart-ecommerce-product-cutout` 为独立的 APIMart 生成式抠图技能。总领工作流仍有其自身的 GPT 默认设置。
+
 # 商品图处理与模板套版 Agent Skills
 
-从真实商品原图出发，使用三个 Agent Skills 制作固定 PSB 主图、图文详情图或双商品拼图：
+从真实商品原图出发，使用四个 Agent Skills 制作固定 PSB 主图、图文详情图或双商品拼图：
 
 | 技能 | 用途 |
 | --- | --- |
 | `ecommerce-template-workflow` | 总领流程：GPT 内置白底/透明抠图，本地主图套版、图文详情图和双商品同平面拼图 |
 | `ai-ecommerce-product-images` | 本地商品抠图、参考图取样调色、精修边缘，输出配套白底与透明 PNG |
+| `apimart-ecommerce-product-cutout` | APIMart 生成式抠图与包装文字核验 |
 | `psb-template-product-swap` | 透明商品素材处理和固定 PSB 母版套版 |
 
 ## 安装
@@ -32,18 +35,18 @@ npx skills add Fishkiller111/ecommerce-product-image-skills --skill '*' --agent 
 
 ## Codex 快速更新
 
-**已安装旧版？先确认 GitHub 已发布所需版本，再把对应系统的一行发给 Codex，让它在原先安装 Skill 的项目根目录执行。** 仓库未发布时，GitHub 安装仍是旧版，应使用本次本地更新包。以下命令更新三个同名技能目录；有手工改动请先备份。
+**已安装旧版？先确认 GitHub 已发布所需版本，再把对应系统的一行发给 Codex，让它在原先安装 Skill 的项目根目录执行。** 仓库未发布时，GitHub 安装仍是旧版，应使用本次本地更新包。以下命令更新四个技能目录；有手工改动请先备份。
 
 macOS / Linux：
 
 ```bash
-npx --yes skills@1.8.1 add Fishkiller111/ecommerce-product-image-skills --skill ecommerce-template-workflow psb-template-product-swap ai-ecommerce-product-images --agent codex --copy --yes
+npx --yes skills@1.8.1 add Fishkiller111/ecommerce-product-image-skills --skill ecommerce-template-workflow psb-template-product-swap ai-ecommerce-product-images apimart-ecommerce-product-cutout --agent codex --copy --yes
 ```
 
 Windows PowerShell（用 `npx.cmd`，无需改执行策略）：
 
 ```powershell
-npx.cmd --yes skills@1.8.1 add Fishkiller111/ecommerce-product-image-skills --skill ecommerce-template-workflow psb-template-product-swap ai-ecommerce-product-images --agent codex --copy --yes
+npx.cmd --yes skills@1.8.1 add Fishkiller111/ecommerce-product-image-skills --skill ecommerce-template-workflow psb-template-product-swap ai-ecommerce-product-images apimart-ecommerce-product-cutout --agent codex --copy --yes
 ```
 
 - **原来是全局安装**：在同一条命令末尾加 `--global`。否则不要加，以免留下项目级和全局两份。
@@ -53,8 +56,8 @@ npx.cmd --yes skills@1.8.1 add Fishkiller111/ecommerce-product-image-skills --sk
 ## 运行条件和边界
 
 - 本地抠图使用 Python 3、Pillow 和 NumPy。参考取样调色需要 OpenCV，边缘去灰需要 SciPy。用保存的蒙版、轮廓和色样复跑时核对原图指纹，步骤见 [参考调色与修边](skills/ai-ecommerce-product-images/references/reference-finishing.md)。
-- 总领工作流的单独白底/透明抠图默认使用 GPT 内置图片编辑，照片会交由 GPT 图像服务处理；同一提示词不保证结果一致，必须逐项核验包装，改字或无法核验不可作为保真成品。固定 PSB 套版、基础详情和拼图按其各自流程执行。仅本地或不上传须按用户要求执行。
-- 使用 GPT 白底流程须确认当前会话确实提供内置图片编辑工具，Skill 本身不提供该工具；不可用时停止并说明，不静默降级。只有主动选用、已配置并授权时才调用 APIMart；不要在对话粘贴密钥。
+- 直接调用本地抠图技能时，商品图只在本机提亮和抠图；总领工作流的单独白底/透明任务仍按其 GPT 流程执行。
+- APIMart 抠图需要上传照片并可能计费；生成结果必须对照核验包装字体和文字，无法核验不能作为保真成品。
 - macOS：Python 3.11+、`requirements.txt`、系统中文字体；自动抠图需 macOS 14+ Vision 和 Xcode Command Line Tools。Windows 10 64 位：建议 Python 3.12 64 位和 `requirements-windows.txt`，使用 `run.bat` 或直接用 Python 运行。Windows 本地 CPU 抠图基于 rembg/ONNX Runtime，仅生成蒙版；首次使用需联网下载 `u2netp` 模型。Windows 字体缺失、ONNX DLL 缺失或自动抠图失败时应先解决依赖或使用已核对的透明 PNG。模型权重和训练数据许可应另行核对。具体命令见套版 Skill。
 - Windows Server CI 测试不代表 Windows 10 真机已经验收；部署前请在目标设备执行真实素材的抠图、中文排版和上架复核。
 - 包含固定 PSB 母版及其原有版式和品牌文字；请确认使用场景和授权。模板采用文件哈希与图层配置校验，不能随意替换。
