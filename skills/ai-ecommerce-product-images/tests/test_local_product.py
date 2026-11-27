@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 SCRIPT=Path(__file__).resolve().parents[1]/'scripts'/'local_product.py'
 sys.path.insert(0, str(SCRIPT.parent))
@@ -112,6 +112,43 @@ class LocalProductTest(unittest.TestCase):
             self.assertEqual(partial_rgb, {(35, 55, 68)})
             self.assertEqual(image.getpixel((35, 25)), (35, 55, 68, 255))
 
+    @unittest.skipUnless(importlib.util.find_spec('cv2'), 'guided contours require OpenCV')
+    def test_guided_refinement_restores_omitted_cap_in_both_orientations(self):
+        from product_edges import refine_product_mask
+
+        photo = Image.new('RGB', (220, 480), (154, 154, 154))
+        seed = Image.new('L', photo.size)
+        body = [(57, 30), (158, 30), (143, 350), (133, 360), (84, 360), (74, 350)]
+        ImageDraw.Draw(seed).polygon(body, fill=255)
+        ImageDraw.Draw(photo).rounded_rectangle((83, 345, 134, 412), radius=9, fill=(167, 166, 164))
+        ImageDraw.Draw(photo).polygon(body, fill=(38, 101, 60))
+        for rotation in (None, Image.Transpose.ROTATE_90):
+            with self.subTest(rotation=rotation):
+                src = photo if rotation is None else photo.transpose(rotation)
+                mask = seed if rotation is None else seed.transpose(rotation)
+                result, report = refine_product_mask(src, mask)
+                if rotation is not None:
+                    result = result.transpose(Image.Transpose.ROTATE_270)
+                self.assertEqual(report['cap_check'], 'recovered-from-edge-evidence')
+                self.assertGreater(result.getpixel((108, 405)), 245)
+                self.assertEqual(result.getpixel((108, 425)), 0)
+                self.assertEqual(result.getpixel((70, 392)), 0)
+
+    @unittest.skipUnless(importlib.util.find_spec('cv2'), 'guided contours require OpenCV')
+    def test_guided_refinement_does_not_extend_into_a_table_seam(self):
+        from product_edges import refine_product_mask
+
+        photo = Image.new('RGB', (220, 480), (154, 154, 154))
+        seed = Image.new('L', photo.size)
+        body = [(57, 30), (158, 30), (143, 350), (133, 360), (84, 360), (74, 350)]
+        ImageDraw.Draw(seed).polygon(body, fill=255)
+        ImageDraw.Draw(photo).polygon(body, fill=(38, 101, 60))
+        ImageDraw.Draw(photo).rectangle((0, 410, 219, 479), fill=(176, 176, 176))
+        result, report = refine_product_mask(photo, seed)
+        self.assertEqual(report['cap_check'], 'check-tapered-end')
+        self.assertLess(result.getbbox()[3], 366)
+        self.assertEqual(result.getpixel((108, 410)), 0)
+
     def test_windows_prefers_small_cached_model_and_keeps_explicit_choice(self):
         cache = self.root / '权重 目录'
         cache.mkdir()
@@ -153,7 +190,13 @@ class LocalProductTest(unittest.TestCase):
         report = json.loads((out / 'review.json').read_text(encoding='utf-8'))
         self.assertEqual(report['mask_backend'], 'rembg-u2netp')
         with Image.open(out / 'native_enhanced_rgba.png') as native:
-            self.assertEqual(native.convert('RGB').tobytes(), original.crop(report['subject_bbox']).tobytes())
+            # Guided refinement can replace mixed-color pixels at the edge.
+            # With grading disabled all fully opaque pixels still match the photo.
+            difference = ImageChops.difference(native.convert('RGB'), original.crop(report['subject_bbox']))
+            opaque = native.getchannel('A').point(lambda value: 255 if value == 255 else 0)
+            solid_difference = Image.new('RGB', native.size)
+            solid_difference.paste(difference, mask=opaque)
+            self.assertIsNone(solid_difference.getbbox())
         with Image.open(out / 'transparent.png') as transparent, Image.open(out / 'white.png') as white:
             self.assertEqual(transparent.size, (1440, 1440))
             alpha = transparent.getchannel('A')
@@ -170,7 +213,7 @@ class LocalProductTest(unittest.TestCase):
         examples = install / 'examples'
         scripts.mkdir(parents=True)
         examples.mkdir()
-        for name in ('local_product.py', 'finish_recipe.py'):
+        for name in ('local_product.py', 'finish_recipe.py', 'product_edges.py'):
             shutil.copyfile(SCRIPT.with_name(name), scripts / name)
         source = self.root / 'original.png'
         Image.new('RGB', (100, 80), (120, 80, 50)).save(source)

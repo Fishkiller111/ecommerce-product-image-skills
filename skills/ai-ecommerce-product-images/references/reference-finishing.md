@@ -2,10 +2,10 @@
 
 ## 选择底稿
 
-- 默认复用有透明背景的源图 alpha，或生成 macOS Vision、本地 rembg 蒙版。接近不透明的 RGBA 白底图仍需分割。自动蒙版没识别到商品时可换本机支持的后端，也可以直接描边。rembg 使用已准备的本地权重。Windows 安装及复跑见 [PowerShell 操作](windows.md)。
+- 默认优先使用原图 alpha 或指纹匹配的配方。普通图在 macOS 先用 Vision，失败后尝试已准备的本地 rembg，Windows 默认走本地 rembg。自动蒙版确定大轮廓后，由 OpenCV 沿原照细化不透明包材的轮廓。Windows 安装及复跑见 [PowerShell 操作](windows.md)。
 - 色差明显、背景简单时可比较 `--backend grabcut --rect X Y WIDTH HEIGHT`。矩形用校正 EXIF 方向后的原图像素，须包住完整商品并留一点背景。检查桌面是否一起被选。
 - 工作中使用原始像素和原图方向。默认居中等比、主体最长边约占方图的 86%，放大最多 2 倍。可用 `--size`、`--fill`、`--upscale-limit 1` 调整。亮度与色彩校正默认开启，`--strength` 默认 1，可按实际观感在 0 至 1.5 内调整。仅在用户要求保留曝光和原色时使用 0。锐化用 `--sharpness` 单独控制。
-- `review.json` 记录 `color_space`、`tone` 和 `edge`。默认曝光根据主体各像素最高通道的第 90 和第 98 百分位估计高光余量，限制高光提亮并保护深色印刷。检查报告中的亮度、色度中位数和曝光增益，再对照原照与成图。带 ICC 的照片先转换到 sRGB，取样图也在 sRGB 中读取数值。
+- `review.json` 记录 `color_space`、`tone` 和 `edge`。默认按主体高光限制整体提亮，并独立估计白色包材和有色印刷的余量。报告记录 `white_material_gain`、`colored_material_gain` 和 `vibrance`。近中性材质的偏色在样本足够且一致时会做适度校正，明显偏色按原照做中性取样。带 ICC 的照片先转换到 sRGB。
 
 ## 按参考图取样
 
@@ -16,8 +16,12 @@
 
 ## 精修轮廓
 
+默认自动蒙版适用于不透明包装。`edge.mode=guided` 表示已沿原图轮廓平滑台阶、修正边线并清理窄过渡带。显式指定模型后端时，可加 `--edge-mode guided` 启用同样的修边，也可用 `--edge-mode preserve` 保留灰度蒙版。若报告 `opencv-unavailable`，安装 `opencv-python-headless` 后重跑可启用引导修边。
+
+软管会沿长轴检查两端。有可辨的两侧连续边和实体底沿时，才尝试补回渐窄主体端部的管盖。`edge.cap_check=recovered-from-edge-evidence` 时核对新增区域和实体底沿。`check-tapered-end` 时对照原照确认端部是否完整。反光或桌面纹路干扰时，可用 `--no-cap-recovery` 单独关闭补全，再根据需要用人工灰度蒙版。
+
 1. 在原照、白底和深灰底上看 100% 和局部放大图。硬盒两条长边有台阶时，在原照上沿真实边界标点。长直边可用局部亮度或颜色梯度找位置，然后平滑拟合；真实转角、折盖和轻微弧线用较密的点跟住。盒底应贴实体下沿，去掉下方桌面或投影。按顺时针或逆时针沿轮廓填 `outline`，渲染时会做亚像素抗锯齿。
-2. 确认轮廓完整后，硬边锯齿可用 `--edge-mode opaque`。脚本只在透明区与实心区相邻处调整 alpha，并从两像素宽邻域恢复过渡带颜色。GrabCut 的硬蒙版在默认模式下会做此处理，Vision、rembg 和外部灰度蒙版保留原 alpha。已按亚像素描过的 `outline` 可用此模式修过渡带颜色，配方也可独立指定 `decontaminate_px`。`--edge-mode preserve` 保留蒙版的过渡。深浅底上都应检查白色折边、银箔和细小凸起。
+2. 确认轮廓完整后，硬边锯齿可用 `--edge-mode opaque`。脚本只在透明区与实心区相邻处调整 alpha，并从两像素宽邻域恢复过渡带颜色。GrabCut 的硬蒙版在默认模式下会做此处理，外部灰度蒙版默认保留 alpha。已按亚像素描过的 `outline` 可用此模式修过渡带颜色，配方也可独立指定 `decontaminate_px`。深浅底上都应检查白色折边、银箔和细小凸起。
 3. 多物体、孔洞、软边或半透明区域用同尺寸灰度蒙版，黑为背景、白为实心、灰为部分透射或覆盖。在原图坐标上局部修改后用 `--mask`，轮廓配方省略 `outline` 和 `decontaminate_px`。保留真实软边和孔洞内的透明度，再叠于不同颜色的背景检查。
 4. `--matte-blackpoint`、`--matte-whitepoint`、`--contract`、`--feather` 用于已确认的轻微蒙版问题。若源图仍可看见盒底、盖角或薄片而候选图缺失，先按实体外沿重画。若局部仍夹背景，可沿该处轮廓收回，避免伤及同图其他部件。
 

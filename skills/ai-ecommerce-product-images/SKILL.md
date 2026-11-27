@@ -1,24 +1,17 @@
 ---
 name: ai-ecommerce-product-images
-description: 在本机将真实商品抠成配套纯白底图和透明 PNG。按材质校正曝光和偏色，精修毛边、锯齿和残留背景，保留包装印字及纹理。
+description: 本地精修电商软膏软管、纸盒、瓶罐等商品实拍，恢复可辨的管盖和封口边缘，按白色包材、彩印和深色文字调色，导出配套纯白底图和透明 PNG。
 ---
 
 # 本地商品抠图与精修
 
-从原照保留商品的角度、结构、印字和纹理。用本地非生成式处理完成调色、轮廓精修和导出。用户给出的成品案例用于判定色调、质感和边缘。同款参考可用于对应材质的精准取样。
+用原照保留商品的角度、结构、印字和纹理。全程在本机处理，使用原图像素。同款参考可用于对应材质取样。不同商品的成品案例用于检查亮度、印刷反差和修边质量。
 
-Windows x64 使用 Python 3.12 和本技能自带的依赖清单。首次安装、CPU 模型准备及中文路径命令见 [Windows PowerShell 操作](references/windows.md)。
+1. **跑默认流程。** 运行 `python <技能目录>/scripts/local_product.py <原图> --out <新输出目录>`。默认保留原图 alpha 或同原图匹配的确认配方。普通照片使用 Vision 或本地 rembg 生成初始蒙版，再用 OpenCV 沿原照细化不透明包装边线，检查软管是否漏掉管盖。默认按包材调色，白盖、彩印和深色文字分别控制。Windows 安装见 [PowerShell 操作](references/windows.md)。
+2. **对照原照逐段放大。** 依次看软管封口、两侧、肩位、盖沿和实体底部，盒装检查折角与长边，瓶罐检查曲线、盖沿和接缝。对照 `white.png`、`preview_dark.png` 和原尺寸图。`review.json` 中 `edge.cap_check` 提示是否补回端部或需要重点检查。发现漏件、多抠或投影时，沿实物外沿修正同尺寸灰度 `--mask` 后重跑。透明盖、孔洞、薄膜和软边保留局部灰度，使用 `--edge-mode preserve`。处理方式见[精修轮廓](references/reference-finishing.md#精修轮廓)。
+3. **核对包材与印刷。** 白色要能辨出接缝和厚薄，彩印提亮后保留色相、纹路和深字反差。偏色明显时，在确定为白或灰的包材内用 `--neutral-rect`。同款换角度或换光线时重新取样，专用配方只按原图指纹复用。按[分区调色](references/reference-finishing.md#按参考图取样)调整，明确保留原曝光和原色时使用 `--strength 0`。
+4. **验收后交付。** 确认 `white.png` 是 `transparent.png` 叠到纯白后的逐像素结果。核对轮廓、文字和调色后，在 `review.json` 写入 `PASS`。明显残边、缺件、色差或印字损坏记 `REJECTED`。原照关键细节无法核验记 `UNVERIFIABLE`，按样张说明具体部位。见[成品验收](references/reference-finishing.md#成品验收)。
 
-1. **生成底稿。** 用 `scripts/local_product.py` 生成初版。源图已有真实透明背景时复用 alpha。自动蒙版由 Vision 或本地 rembg 提供，也可用 GrabCut 或 `--mask`。脚本按原图 SHA-256 载入已启用的精修配方。见[运行与复跑说明](references/reference-finishing.md#选择底稿)。
+需要 Python 3、带 LittleCMS 的 Pillow、NumPy 和 OpenCV（原照引导修边、参考取样）。macOS Vision 需要 macOS 14+ 和 Xcode Command Line Tools。已有配方的 `decontaminate_px` 用 SciPy。
 
-   ```text
-   python <技能目录>/scripts/local_product.py <原图> --out <新输出目录>
-   ```
-
-2. **逐材质调色。** 核对原照与精修图中的主色、深色印刷、白色部件和折面。默认按主体高光余量提亮，亮色包装减少干预，深色印刷保留反差。确认白盖或灰色材质偏色时，可用 `--neutral-rect` 取样。有同款成品时用 `palette` 按对应材质取样校色。用跨品类成品对照材质表现和边缘质量。同商品换光线或角度需重新取样。具体见[分区调色](references/reference-finishing.md#按参考图取样)。用户要求保留曝光和原色时用 `--strength 0`。
-3. **逐段修边。** 在白底和深灰底看最终输出，按原尺寸核对边线，放大确认转角、长斜边、折口、瓶盖、孔洞和实体底沿。先沿原照修正错位、缺口和夹带阴影，再处理窄过渡带。硬盒或不透明瓶身可试 `--edge-mode opaque`，比较修前修后。软边、孔洞和半透明部件用灰度蒙版局部精修。见[精修轮廓](references/reference-finishing.md#精修轮廓)。
-4. **验收后交付。** 检查白底、深灰底以及原尺寸导出。核对材质、细字、纹路、边缘完整度和底色一致性。确认 `white.png` 由最终 `transparent.png` 像素一致地合成。仍有可修复的问题就修正并复跑。通过后在 `review.json` 写入 `PASS`。色差明显、漏抠、多抠或印字损坏记 `REJECTED`，原照关键细节无法判读记 `UNVERIFIABLE`。后两种按样张标注并说明部位。参见[成品验收](references/reference-finishing.md#成品验收)。
-
-基本处理需要 Python 3、带 LittleCMS 的 Pillow 和 NumPy。参考取样调色用 OpenCV，已有配方的 `decontaminate_px` 用 SciPy。macOS 自动蒙版需 macOS 14+ 和 Xcode Command Line Tools。
-
-输出 `white.png`、`transparent.png`、`native_original_rgba.png`、`native_enhanced_rgba.png`、`mask.png`、`preview_dark.png` 和 `review.json`。默认方图为 1440 × 1440。白底、透明图和两种原尺寸图统一为 sRGB。
+交付默认 1440 × 1440 的 sRGB `white.png` 和 `transparent.png`。同时保存原尺寸主体 `native_original_rgba.png`、`native_enhanced_rgba.png`、`mask.png`、深灰预览 `preview_dark.png` 和 `review.json`。

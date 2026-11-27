@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 import numpy as np
 from PIL import Image, ImageCms, ImageEnhance, ImageFilter, ImageOps
+from product_edges import refine_product_mask
 from finish_recipe import (
     antialias_opaque_mask, decontaminate_opaque_edge, outline_mask, palette_grade, remove_fringe,
 )
@@ -100,7 +101,17 @@ def local_mask(source, im, backend, model, rect, supplied, tmp):
             # An alpha-only edited PNG or a grayscale mask are both supported.
             return (m.getchannel('A') if 'A' in m.getbands() else m.convert('L')), 'user-mask'
     if backend == 'auto':
-        backend = 'alpha' if alpha.getextrema()[0] <= 8 else ('vision' if sys.platform == 'darwin' else 'rembg')
+        if alpha.getextrema()[0] <= 8:
+            return alpha, 'source-alpha'
+        if sys.platform != 'darwin':
+            return rembg_mask(im, model)
+        try:
+            return local_mask(source, im, 'vision', model, rect, supplied, tmp)
+        except (RuntimeError, subprocess.CalledProcessError) as vision_error:
+            try:
+                return rembg_mask(im, model)
+            except RuntimeError as rembg_error:
+                raise RuntimeError(f'{vision_error} 本地备用模型同样未能生成蒙版：{rembg_error}') from rembg_error
     if backend == 'alpha':
         if alpha.getextrema()[0] == 255:
             raise ValueError('源图没有透明背景，不能使用 alpha 模式')
@@ -195,6 +206,38 @@ def neutral_sample(image, mask, rect):
     return sample
 
 
+def exposure_gain(anchor, target, ceiling):
+    """Solve the shoulder curve for an exposure anchor with protected highlights."""
+    return float(np.clip(target*(1-anchor)/((1-target)*max(anchor, .01)), 1, ceiling))
+
+
+def inferred_white_sample(rgb, pale, solid, size):
+    """Estimate a small cast only when independent light areas agree."""
+    candidates = rgb[pale]
+    sample = np.median(candidates, axis=0)
+    width, height = size
+    maximum_spread = .045
+    if max(size) >= 2.6*min(size):
+        axis = int(width >= height)
+        positions = np.nonzero(pale)[axis]
+        span = max(size)
+        front = candidates[positions < .20*span]
+        back = candidates[positions >= .80*span]
+        if min(len(front), len(back)) < max(20, len(candidates)*.07):
+            return None
+        first, last = np.median(front, axis=0), np.median(back, axis=0)
+        if np.max(abs(first/first.max()-last/last.max())) >= .085:
+            return None
+        sample = (first+last)/2
+        candidates = np.concatenate([front, back])
+        if np.percentile(rgb[solid].max(axis=1), 90) < .59:
+            maximum_spread = .085
+    residual = candidates-candidates.mean(axis=1, keepdims=True)
+    if .008 < np.ptp(sample) <= maximum_spread and np.max(np.std(residual, axis=0)) < .023:
+        return sample*255
+    return None
+
+
 def adaptive_grade(rgba, strength, neutral):
     if not strength:
         return rgba, {}
@@ -203,31 +246,68 @@ def adaptive_grade(rgba, strength, neutral):
     solid, soft = subject_pixels(alpha)
     source = arr[:, :, :3].astype(np.float32)/255
     rgb = source
-    if neutral is not None:
-        # Correct a measured cast without flattening print or shading on the material.
-        gains = np.power((neutral @ LUMA_WEIGHTS)/neutral, min(strength, 1))
-        balanced = (source*gains).astype(np.float32)
-        rgb = balanced / np.maximum(1, balanced.max(axis=2, keepdims=True))
     peak = rgb.max(axis=2)
-    p90, p98 = np.percentile(peak[solid], [90, 98])
-    highlight = max(p90, .92*p98)
-    # A high channel in saturated stock counts as exposure headroom already used.
-    # Roll the lift off smoothly toward the channel ceiling and keep dark ink anchored.
-    target = .82
-    gain = target*(1-highlight)/((1-target)*max(highlight, .01))
-    gain = max(1, min(1.25 if soft else 3, gain))**strength
+    chroma = peak-rgb.min(axis=2)
     luma = rgb @ LUMA_WEIGHTS
-    ink_guard = np.clip((luma-.09)/.24, 0, 1)
-    lift = (gain/(1+(gain-1)*peak)-1)*ink_guard
+    pale = solid & (luma >= .35) & (chroma <= .10) & (peak < .96)
+    white_stock = np.count_nonzero(pale) >= max(24, .08*np.count_nonzero(solid))
+    inferred_neutral = inferred_white_sample(rgb, pale, solid, rgba.size) if (
+        neutral is None and white_stock and not soft
+    ) else None
+    neutral_reference = neutral if neutral is not None else inferred_neutral
+    if neutral_reference is not None:
+        correction = min(strength, 1) if neutral is not None else min(strength, 1)*.60
+        gains = np.power((neutral_reference @ LUMA_WEIGHTS)/neutral_reference, correction)
+        balanced = (rgb*gains).astype(np.float32)
+        if neutral is None:
+            near_neutral = np.clip((.16-chroma)/.11, 0, 1)
+            balanced = rgb + (balanced-rgb)*near_neutral[:, :, None]
+        rgb = balanced/np.maximum(1, balanced.max(axis=2, keepdims=True))
+        peak = rgb.max(axis=2)
+        chroma = peak-rgb.min(axis=2)
+        luma = rgb @ LUMA_WEIGHTS
+
+    p90, p98 = np.percentile(peak[solid], [90, 98])
+    deep_exposure = float(np.clip((.59-p90)/.16, 0, 1))
+    gain = exposure_gain(max(p90, .86*p98), .84, 1.25 if soft else 3.5+.9*deep_exposure)
+    colored = solid & (chroma > .105) & (luma > .16)
+    color_gain = gain
+    if not soft and np.count_nonzero(colored) >= max(24, .035*np.count_nonzero(solid)):
+        color_mid, color_high = np.percentile(peak[colored], [72, 92])
+        color_gain = exposure_gain(max(color_mid, .80*color_high), .83, 3.8+1.3*deep_exposure)
+        color_gain = 1+(color_gain-1)*float(np.clip((.955-p90)/.13, 0, 1))
+    white_gain = gain
+    if white_stock and not soft:
+        white_anchor = np.percentile(peak[pale], 72)
+        white_gain = exposure_gain(white_anchor, .89, 4.4+1.0*deep_exposure)
+        # Respect package whites with plenty of light already in the source.
+        if p90 > .92:
+            white_gain = 1+(white_gain-1)*float(np.clip((.98-p90)/.06, 0, 1))
+
+    color_weight = np.clip((chroma-.065)/.16, 0, 1)
+    white_weight = np.clip((.145-chroma)/.105, 0, 1)*np.clip((luma-.28)/.19, 0, 1)
+    local_gain = ((gain+(color_gain-gain)*color_weight)*(1-white_weight)+white_gain*white_weight)**strength
+    ink_guard = np.clip((luma-.085)/.26, 0, 1)
+    lift = (local_gain/(1+(local_gain-1)*peak)-1)*ink_guard
     graded = rgb*(1+lift[:, :, None])
+    vibrance = min(strength, 1.3)*.44*(1-1/max(color_gain, 1))
+    graded_luma = graded @ LUMA_WEIGHTS
+    saturation = chroma/np.maximum(peak, 1e-5)
+    amount = vibrance * color_weight * (1-.75*saturation) * ink_guard
+    delta = (graded-graded_luma[:, :, None])*amount[:, :, None]
+    room = np.where(delta > 0, 1-graded, graded)/np.maximum(abs(delta), 1e-6)
+    graded += delta*np.minimum(1, room.min(axis=2, keepdims=True))
     weight = np.clip((alpha.astype(np.float32)-16)/180, 0, 1) if soft else alpha > 0
-    arr[:, :, :3] = np.rint((source+(graded-source)*weight[:, :, None])*255).astype(np.uint8)
+    arr[:, :, :3] = np.rint(np.clip(source+(graded-source)*weight[:, :, None], 0, 1)*255).astype(np.uint8)
     measurements = {
         'highlight_p90': round(float(p90)*255, 1), 'highlight_p98': round(float(p98)*255, 1),
-        'exposure_gain': round(gain, 3),
+        'exposure_gain': round(gain**strength, 3), 'white_material_gain': round(white_gain**strength, 3),
+        'colored_material_gain': round(color_gain**strength, 3), 'vibrance': round(vibrance, 3),
     }
-    if neutral is not None:
-        measurements.update(neutral_sample=neutral.tolist(), neutral_gains=np.round(gains, 4).tolist())
+    if neutral_reference is not None:
+        measurements.update(neutral_sample=np.round(neutral_reference, 1).tolist(),
+                            neutral_gains=np.round(gains, 4).tolist(),
+                            neutral_source='manual' if neutral is not None else 'near-neutral-stock')
     return Image.fromarray(arr), measurements
 
 
@@ -288,8 +368,9 @@ def main():
     p.add_argument('--rect',type=int,nargs=4,metavar=('X','Y','WIDTH','HEIGHT'))
     p.add_argument('--neutral-rect',type=int,nargs=4,metavar=('LEFT','TOP','RIGHT','BOTTOM'),
                    help='以原图中确认是白色或灰色的材质为偏色取样')
-    p.add_argument('--edge-mode',choices=['auto','preserve','opaque'],default='auto',
-                   help='不透明硬边局部抗锯齿；auto 仅对 GrabCut 硬蒙版开启')
+    p.add_argument('--edge-mode',choices=['auto','preserve','opaque','guided'],default='auto',
+                   help='auto 精修不透明模型蒙版；guided 显式按原照修边；preserve 保留灰度过渡')
+    p.add_argument('--no-cap-recovery', action='store_true', help='关闭软管端部补全，保留原照引导修边')
     p.add_argument('--contract',type=int,default=0,help='蒙版向内收缩像素；默认 0，防止缺边')
     p.add_argument('--feather',type=float,default=0,help='蒙版羽化半径；默认 0')
     p.add_argument('--matte-blackpoint',type=int,default=0,help='低于此 alpha 阈值的背景设透明；默认不处理')
@@ -325,8 +406,19 @@ def main():
         try:
             with tempfile.TemporaryDirectory(prefix='local-product-') as d:
                 mask,mode=local_mask(source,im,a.backend,a.model,a.rect,a.mask,Path(d))
-        except (RuntimeError, ValueError) as exc:
+        except (RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
             p.error(str(exc))
+    edge_review = {}
+    automatic_model = a.backend == 'auto' and mode.startswith(('macOS Vision', 'rembg-'))
+    guided_edge = outline is None and (a.edge_mode == 'guided' or (a.edge_mode == 'auto' and automatic_model))
+    if guided_edge:
+        try:
+            mask, edge_review = refine_product_mask(im, mask, recover_caps=not a.no_cap_recovery)
+        except ImportError:
+            if a.edge_mode == 'guided':
+                p.error('原照引导修边需要本地 OpenCV：opencv-python-headless')
+            edge_review = {'contour_refined': False, 'cap_check': 'opencv-unavailable'}
+    refined = edge_review.get('contour_refined', False)
     opaque_edge = a.edge_mode == 'opaque' or (a.edge_mode == 'auto' and mode.startswith('OpenCV GrabCut'))
     if a.matte_blackpoint or a.matte_whitepoint != 255:
         low, high=a.matte_blackpoint,a.matte_whitepoint
@@ -336,7 +428,7 @@ def main():
     if opaque_edge and outline is None:
         mask = antialias_opaque_mask(mask)
     supplied_alpha = mode in ('source-alpha', 'user-mask')
-    bbox = (mask.getbbox() if outline is not None or supplied_alpha or opaque_edge
+    bbox = (mask.getbbox() if outline is not None or supplied_alpha or opaque_edge or refined
             else mask.point(lambda x: 255 if x>8 else 0).getbbox())
     if not bbox or mask.getextrema()[1] < (16 if supplied_alpha else 128):
         raise ValueError('未检测到有效商品蒙版')
@@ -360,7 +452,7 @@ def main():
         tone.update(method='reference-palette',samples=len(samples))
     if fringe:
         enhanced=remove_fringe(enhanced,fringe)
-    recover_edge = opaque_edge and not fringe and mode != 'source-alpha'
+    recover_edge = (opaque_edge or refined) and not fringe and mode != 'source-alpha'
     if recover_edge:
         enhanced = decontaminate_opaque_edge(enhanced)
     tone.update(tone_measurements(raw,enhanced))
@@ -381,9 +473,10 @@ def main():
     report={'source':str(source),'source_sha256':sha,'source_size':list(im.size),'subject_bbox':list(bbox),'mask_backend':mode,'contract_px':a.contract,'feather_px':a.feather,'matte_blackpoint':a.matte_blackpoint,'matte_whitepoint':a.matte_whitepoint,'tone':tone,'canvas':a.size,'actual_subject_px':list(target.size),'upscale_ratio':round(scale,3),'review_status':'待人工复核','note':'保留原商品像素进行调色；插值不可创造细节。须核对文字、包装边缘及色彩。'}
     report['color_space'] = color_space
     report['edge'] = {
-        'mode': 'opaque' if opaque_edge else 'preserve',
-        'antialias_applied': opaque_edge and outline is None,
+        'mode': 'guided' if refined else ('opaque' if opaque_edge else 'preserve'),
+        'antialias_applied': refined or (opaque_edge and outline is None),
         'edge_rgb_recovery_radius_px': 2 if recover_edge else fringe,
+        **edge_review,
     }
     if neutral is not None:
         tone['neutral_rect'] = a.neutral_rect
